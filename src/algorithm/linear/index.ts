@@ -1,0 +1,9 @@
+export { LinearRegression } from "./LinearRegression";
+export { LogisticRegression } from "./LogisticRegression";
+export { RidgeRegression } from "./RidgeRegression";
+export { LassoRegression } from "./LassoRegression";
+export { ElasticNet } from "./ElasticNet";
+export { RidgeClassifier } from "./RidgeClassifier";
+export { RANSACRegressor } from "./RANSACRegressor";
+export { PoissonRegressor } from "./PoissonRegressor";
+export { PolynomialRegression } from "./PolynomialRegression";
