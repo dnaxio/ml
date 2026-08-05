@@ -128,7 +128,14 @@ interface JsonFitSpec { features: string[]; target: string; options?: JsonTransf
 
 // Unsupervised
 interface ClusterSpec { features: string[]; options?: JsonTransformOptions }
+```
 
+> **Supervised vs unsupervised**: supervised models (`JsonFitSpec`, 21 models)
+> have a `target` and expose `score`/`mse`/`classificationReport`. Unsupervised
+> models take only `features` (`ClusterSpec`) and have no `score` — see
+> [Core concepts](/11-core-concepts) for the full classification.
+
+```ts
 // Monitoring
 interface MonitorSpec { field: string; missing?: "throw" | "fill" }
 interface ParallelSpec { fields: string[]; params?: Record<string, unknown>; missing?: "throw" | "fill" }
