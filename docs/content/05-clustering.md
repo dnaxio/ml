@@ -5,6 +5,9 @@ navigation:
   icon: lucide:boxes
 ---
 
+> **Scoped vs flat import** — scoped: `new clusters.KMeans()` ·
+> flat: `import { KMeans } from "@dnax/ml"`. Both are identical.
+
 Clustering groups unlabeled rows into meaningful groups — there is **no
 target field**, the spec only selects `features`.
 

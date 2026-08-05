@@ -5,6 +5,9 @@ navigation:
   icon: lucide:activity
 ---
 
+> **Scoped vs flat import** — scoped: `new monitoring.CUSUM()` ·
+> flat: `import { CUSUM } from "@dnax/ml"`. Both are identical.
+
 Statistical process control methods that detect the **onset of a sustained
 shift** in a series — e.g. the beginning of a sales peak. They complement the
 ML models: IsolationForest flags anomalies *per transaction*, CUSUM/EWMA flag

@@ -5,6 +5,9 @@ navigation:
   icon: lucide:map-pin
 ---
 
+> **Scoped vs flat import** — scoped: `new scan.SpatialScan()` ·
+> flat: `import { SpatialScan } from "@dnax/ml"`. Both are identical.
+
 `SpatialScan` (Kulldorff / SaTScan) detects **statistically significant
 spatial clusters** — e.g. a localized disease outbreak. It slides a circular
 window of every size around every zone, scores each window with the Poisson

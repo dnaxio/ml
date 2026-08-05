@@ -5,6 +5,9 @@ navigation:
   icon: lucide:function-square
 ---
 
+> **Scoped vs flat import** — scoped: `new linear.LinearRegression()` ·
+> flat: `import { LinearRegression } from "@dnax/ml"`. Both are identical.
+
 All linear models share the same JSON-first API: `fit`, `predict`,
 `fill_predict`, `coef`, `intercept`, `getParams()` / `setParams()`,
 `predictAsync`, `score`, `mse` and `export` / `load`.

@@ -46,6 +46,10 @@ What just happened:
 3. The model remembers the transformation: `coef`, `columnNames` and
    `export`/`load` all stay consistent.
 
+Both import styles work everywhere — scoped `new linear.LinearRegression()`
+and flat `new LinearRegression()` are identical (see
+[Core concepts](/03-core-concepts)).
+
 ## Evaluate the model
 
 ```ts
@@ -65,9 +69,9 @@ console.log(reg.score(test)); // quality on unseen rows
 
 ## What next?
 
-- [Core concepts](/11-core-concepts) — the JSON-first spec, value encoding, missing values, scoped imports
-- [Linear models](/03-linear) — regression and classification
-- [Evaluation](/09-evaluation) — score, metrics, splits, cross-validation
-- [Monitoring](/07-monitoring) — time-series drift detection
-- [Spatial scan](/08-scan) — geographic cluster detection
+- [Core concepts](/03-core-concepts) — the JSON-first spec, value encoding, missing values, scoped imports
+- [Linear models](/04-linear) — regression and classification
+- [Evaluation](/10-evaluation) — score, metrics, splits, cross-validation
+- [Monitoring](/08-monitoring) — time-series drift detection
+- [Spatial scan](/09-scan) — geographic cluster detection
 - [API reference](/12-api-reference) — every model and method

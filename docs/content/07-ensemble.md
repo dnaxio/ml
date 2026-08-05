@@ -5,6 +5,9 @@ navigation:
   icon: lucide:layers
 ---
 
+> **Scoped vs flat import** — scoped: `new ensemble.RandomForestClassifier()` ·
+> flat: `import { RandomForestClassifier } from "@dnax/ml"`. Both are identical.
+
 Ensembles combine many weak models into one strong model. They expose
 `featureImportances` instead of `coef` / `intercept`, plus the evaluation
 methods (`score`, `classificationReport`, `rocAucScore` where applicable).

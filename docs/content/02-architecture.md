@@ -7,19 +7,9 @@ navigation:
 
 `@dnax/ml` is a **JSON-first facade** over the `@kanaries/ml` engine (pinned
 to an exact version — `1.1.0` — to freeze its internal serialization format):
-
-```
-algorithm/
-├── core/            ← the SINGLE import point of @kanaries/ml
-│   ├── kml.ts         (engine namespace + factories)
-│   └── state.ts       (centralized internal-state access + serialization)
-├── linear/ clusters/ tree/ ensemble/   ← wrappers (never import kml directly)
-├── monitoring/ scan/                   ← pure JS, zero dependency
-└── transformation/                     ← JSON → matrix + scaler via core
-```
-
-Swapping the engine (or vendoring it) only requires rewriting
-`algorithm/core/` — the 25 wrappers never touch the package directly.
+all direct access to the engine is centralized in a single internal module
+(the **core facade**), so swapping the engine — or vendoring it — only
+requires rewriting that one layer, never the models themselves.
 
 ## Dependencies
 

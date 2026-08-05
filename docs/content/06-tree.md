@@ -5,6 +5,9 @@ navigation:
   icon: lucide:git-branch
 ---
 
+> **Scoped vs flat import** — scoped: `new tree.DecisionTreeClassifier()` ·
+> flat: `import { DecisionTreeClassifier } from "@dnax/ml"`. Both are identical.
+
 Trees split the feature space into **if/else rules** — the most interpretable
 models in the SDK. They share a common JSON-first API and expose
 `featureImportances` (how much each feature drives the splits) instead of
