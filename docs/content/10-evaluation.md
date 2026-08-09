@@ -1,6 +1,6 @@
 ---
 title: Evaluation
-description: Score your models — R², MSE, accuracy, classification reports, ROC/AUC, train/test splits and cross-validation.
+description: Score your models — R², MSE, MAE, accuracy, classification reports, ROC/AUC, train/test splits and cross-validation.
 navigation:
   icon: lucide:gauge
 ---
@@ -10,9 +10,10 @@ Every supervised model scores itself on rows that include the `target` field
 by the `'drop'` strategy are excluded):
 
 ```ts
-// Regressors → R² + MSE
+// Regressors → R² + MSE + MAE
 reg.score(data); // number — R² (1 = perfect fit)
 reg.mse(data); // number — mean squared error (0 = perfect)
+reg.mae(data); // number — mean absolute error (0 = perfect)
 
 // Classifiers → accuracy + full report
 clf.score(data); // number — accuracy
@@ -24,7 +25,7 @@ clf.classificationReport(data); // { accuracy, precision, recall, fScore,
 clf.rocAucScore(data); // number — AUC (1 = perfect, 0.5 = random, binary only)
 ```
 
-Implemented on: 13 regressors (`score`/`mse`) and 8 classifiers
+Implemented on: 13 regressors (`score`/`mse`/`mae`) and 8 classifiers
 (`score`/`classificationReport`, + `rocAucScore` on the 5 with
 `predict_proba`). Clustering, IsolationForest, monitoring and scan have no
 target → no `score`.

@@ -66,5 +66,5 @@ reg.fit(data, { features: ["note", "heures"], target: "resultat" });
 | `randomState`       | —              | seed for reproducible random feature selection |
 
 All tree models also expose the evaluation methods (`score` for accuracy/R²,
-`mse` for regressors, `classificationReport` for classifiers) and full
+`mse`/`mae` for regressors, `classificationReport` for classifiers) and full
 persistence (`export` / `load`).

@@ -1,4 +1,4 @@
-import { kml, createScaler, loadModel, toJSONOf } from "../algorithm/core";
+import { kml, createScaler, loadModel, toJSONOf } from "../core";
 import type {
   TransformerSpec,
   JsonRow,

@@ -1,6 +1,6 @@
 ---
 title: Spatial Scan
-description: Detect statistically significant spatial clusters — a localized outbreak, a geographic concentration.
+description: Detect statistically significant spatial clusters — Kulldorff's scan (most likely cluster) and Getis-Ord Gi* (per-zone hotspots).
 navigation:
   icon: lucide:map-pin
 ---
@@ -64,3 +64,53 @@ interface ScanCluster {
   pValue: number;       // empirical Monte-Carlo p-value
 }
 ```
+
+## `GetisOrd` — Gi* local hotspots
+
+Complementary statistic: Kulldorff answers *"where is the single most likely
+cluster?"*; **Getis-Ord Gi*** answers *"which zones are unusually hot or
+cold?"* — **one result per zone**, no Monte-Carlo, O(n·k).
+
+```ts
+import { GetisOrd } from "@dnax/ml";
+
+const gi = new GetisOrd({ distance: 1, significance: 0.05 });
+gi.fit(zones, {
+  zone: "zone",
+  coordinates: ["lon", "lat"],
+  cases: "cases", // the variable of interest (counts or rates)
+});
+
+const results = gi.hotspots(current); // per zone
+// → { zone, zScore, pValue, hot, cold }[]
+const flagged = gi.fill_predict(current); // rows + hot: boolean
+```
+
+**How it works**: for each zone i, the Gi* z-score compares the case sum over
+the neighborhood (zones within `distance`, i included) to what the global
+mean would predict. A **positive z with p ≤ significance = hotspot**, a
+**negative z = cold spot**.
+
+| Param         | Default | Role                                              |
+| ------------- | ------- | ------------------------------------------------- |
+| `distance`    | mean NN | neighborhood radius (coordinates unit)            |
+| `significance`| `0.05`  | two-sided level for hot/cold classification       |
+| `hotField`    | `'hot'` | boolean field filled by `fill_predict`            |
+
+**Notes**
+
+- `fit` learns geometry only (same zones as `SpatialScan`); the default
+  `distance` is the mean nearest-neighbor distance (deterministic).
+- `hotspots(data)` returns `{ zone, zScore, pValue, hot, cold }` per row;
+  `predict` → 1 = significant hotspot, `fill_predict` → + `hot: boolean`.
+- Works on raw counts **or** rates — pass population-adjusted rates in
+  `cases` to compare zones of different sizes fairly.
+- Uniform cases (zero variance) → z = 0, p = 1 → no hotspot.
+
+**When to use which**
+
+| Question | Model |
+| -------- | ----- |
+| "Where is the most likely cluster?" (retrospective, with population) | `SpatialScan` |
+| "Which zones are statistically hot right now?" (map of hotspots) | `GetisOrd` |
+| "Cluster the cases without a population denominator" | `DBSCAN` / `HDBSCAN` |

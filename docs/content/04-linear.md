@@ -10,7 +10,7 @@ navigation:
 
 All linear models share the same JSON-first API: `fit`, `predict`,
 `fill_predict`, `coef`, `intercept`, `getParams()` / `setParams()`,
-`predictAsync`, `score`, `mse` and `export` / `load`.
+`predictAsync`, `score`, `mse`, `mae` and `export` / `load`.
 
 ## `LinearRegression`
 

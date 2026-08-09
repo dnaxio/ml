@@ -1,1 +1,0 @@
-export { SpatialScan } from "./SpatialScan";

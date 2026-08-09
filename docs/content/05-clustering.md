@@ -1,6 +1,6 @@
 ---
 title: Clustering
-description: Unsupervised grouping — KMeans and density-based DBSCAN.
+description: Unsupervised grouping — KMeans, density-based DBSCAN and hierarchical HDBSCAN.
 navigation:
   icon: lucide:boxes
 ---
@@ -58,9 +58,36 @@ db.labels_; // [0, 0, 1, 1, -1, ...] — -1 means noise
 > **Note**: DBSCAN does not support `predict` on new points (like
 > scikit-learn) — use `fit_predict` on the full dataset instead.
 
+## `HDBSCAN` — hierarchical density clustering
+
+Extends DBSCAN with a **density hierarchy**: clusters of arbitrary shape and
+**varying density** are selected by stability, and isolated points get a
+near-zero membership probability. No `predict` on new points — labels are
+computed on the training rows.
+
+```ts
+import { HDBSCAN } from "@dnax/ml";
+
+const hdb = new HDBSCAN({ min_cluster_size: 5 });
+hdb.fit(ventesGeo, { features: ["x", "y"] });
+hdb.labels_;       // [0, 0, 1, 1, ...] — cluster label per row
+hdb.probabilities; // [1, 0.9, 1, ...] — membership strength (0 = noise)
+```
+
+| Param                    | Default | Role                                              |
+| ------------------------ | ------- | ------------------------------------------------- |
+| `min_cluster_size`       | `5`     | smallest group considered a cluster (≥ 2)         |
+| `min_samples`            | `null`  | neighborhood size for core distances (= min size) |
+| `cluster_selection_epsilon` | —    | clusters split below this distance are merged     |
+| `metric`                 | `'euclidean'` | distance metric name                       |
+| `allow_single_cluster`   | `false` | allow the root hierarchy as one cluster           |
+
 ## Tips
 
 - Normalize features (`options: { scale: true }`) before clustering so
   distances behave consistently.
 - `options.noise` can be used as a **stability diagnostic**: if clusters
   change a lot under slight jittering, the signal is weak.
+- **KMeans** groups by *count* (you pick k) · **DBSCAN** by *density*
+  (you pick eps) · **HDBSCAN** by *density hierarchy* (it picks the shapes) —
+  start with HDBSCAN when the clusters have uneven densities or shapes.

@@ -67,10 +67,10 @@ scan.fit(zones, {
 
 | Category | Models | Spec | Goal | Evaluation |
 | -------- | ------ | ---- | ---- | ---------- |
-| **Supervised** (21) | **13 regressors**: `LinearRegression`, `RidgeRegression`, `LassoRegression`, `ElasticNet`, `RANSACRegressor`, `PoissonRegressor`, `PolynomialRegression`, `DecisionTreeRegressor`, `ExtraTreeRegressor`, `RandomForestRegressor`, `AdaBoostRegressor`, `GradientBoostingRegressor`, `XGBoostRegressor` · **8 classifiers**: `LogisticRegression`, `RidgeClassifier`, `DecisionTreeClassifier`, `ExtraTreeClassifier`, `RandomForestClassifier`, `AdaBoostClassifier`, `GradientBoostingClassifier`, `XGBoostClassifier` | `{ features, target }` | learn Y from X, predict new Y | `score`, `mse`, `classificationReport`, `rocAucScore` ✅ |
-| **Unsupervised** (3) | `KMeans`, `DBSCAN` (clustering) · `IsolationForest` (anomaly detection) | `{ features }` only — no target | find groups / flag anomalies | ❌ no `score` |
+| **Supervised** (21) | **13 regressors**: `LinearRegression`, `RidgeRegression`, `LassoRegression`, `ElasticNet`, `RANSACRegressor`, `PoissonRegressor`, `PolynomialRegression`, `DecisionTreeRegressor`, `ExtraTreeRegressor`, `RandomForestRegressor`, `AdaBoostRegressor`, `GradientBoostingRegressor`, `XGBoostRegressor` · **8 classifiers**: `LogisticRegression`, `RidgeClassifier`, `DecisionTreeClassifier`, `ExtraTreeClassifier`, `RandomForestClassifier`, `AdaBoostClassifier`, `GradientBoostingClassifier`, `XGBoostClassifier` | `{ features, target }` | learn Y from X, predict new Y | `score`, `mse`, `mae`, `classificationReport`, `rocAucScore` ✅ |
+| **Unsupervised** (4) | `KMeans`, `DBSCAN`, `HDBSCAN` (clustering) · `IsolationForest` (anomaly detection) | `{ features }` only — no target | find groups / flag anomalies | ❌ no `score` |
 | **Monitoring** (4) | `CUSUM`, `EWMA`, `ParallelMonitor`, `SeasonalMonitor` | `{ field }` — one series | detect when a series drifts from its normal | `update(row)` for real-time |
-| **Spatial scan** (1) | `SpatialScan` | `{ zone, coordinates, population, cases }` | detect statistically significant spatial clusters | `cluster(data)` → p-value |
+| **Spatial scan** (2) | `SpatialScan` (Kulldorff) · `GetisOrd` (Gi* hotspots) | `{ zone, coordinates, population, cases }` / `{ zone, coordinates, cases }` | detect statistically significant spatial clusters / hotspots | `cluster(data)` → p-value · `hotspots(data)` → z-scores |
 
 The rule of thumb: **supervised** models have a `target` in the spec and can be
 scored against ground truth; **unsupervised** models only take `features` and

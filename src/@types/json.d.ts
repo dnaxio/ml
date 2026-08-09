@@ -1,5 +1,5 @@
-import type { CUSUMParams } from "../algorithm/monitoring/CUSUM";
-import type { EWMAParams } from "../algorithm/monitoring/EWMA";
+import type { CUSUMParams } from "../monitoring/CUSUM";
+import type { EWMAParams } from "../monitoring/EWMA";
 
 /** A JSON data row (row object). */
 export type JsonRow = Record<string, unknown>;
@@ -110,6 +110,16 @@ export interface ScanSpec {
   /** Field with the population at risk per zone. */
   population: string;
   /** Field with the case count per zone (baseline at fit, current at scan). */
+  cases: string;
+}
+
+/** Specification for a Getis-Ord Gi* hotspot analysis. */
+export interface HotspotSpec {
+  /** Field identifying the spatial zone (unique id per row). */
+  zone: string;
+  /** Two fields with the zone coordinates, e.g. ["x", "y"] or ["lon", "lat"]. */
+  coordinates: [string, string];
+  /** Field with the case count per zone (the variable of interest). */
   cases: string;
 }
 

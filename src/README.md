@@ -36,9 +36,10 @@ Every supervised model scores itself on rows that include the `target` field
 by the `'drop'` strategy are excluded):
 
 ```ts
-// Regressors → R² + MSE
+// Regressors → R² + MSE + MAE
 reg.score(data); // number — R² (1 = perfect fit)
 reg.mse(data); // number — mean squared error (0 = perfect)
+reg.mae(data); // number — mean absolute error (0 = perfect)
 
 // Classifiers → accuracy + full report
 clf.score(data); // number — accuracy
@@ -50,7 +51,7 @@ clf.classificationReport(data); // { accuracy, precision, recall, fScore,
 clf.rocAucScore(data); // number — AUC (1 = perfect, 0.5 = random, binary only)
 ```
 
-Implemented on: 13 regressors (`score`/`mse`) and 8 classifiers
+Implemented on: 13 regressors (`score`/`mse`/`mae`) and 8 classifiers
 (`score`/`classificationReport`, + `rocAucScore` on the 5 with `predict_proba`).
 Clustering, IsolationForest, monitoring and scan have no target → no `score`.
 
@@ -444,6 +445,25 @@ db.labels_; // [0, 0, 1, 1, -1, ...] — -1 means noise
 // Note: DBSCAN does not support predict on new points (like scikit-learn);
 // use fit_predict on the full dataset instead.
 ```
+
+### `HDBSCAN` — hierarchical density clustering
+
+Extends DBSCAN with a density hierarchy: clusters of arbitrary shape and
+varying density are selected by stability, and isolated points get a
+near-zero membership probability.
+
+```ts
+import { HDBSCAN } from "@dnax/ml";
+
+const hdb = new HDBSCAN({ min_cluster_size: 5 });
+hdb.fit(ventesGeo, { features: ["x", "y"] });
+hdb.labels_;       // [0, 0, 1, 1, ...] — cluster label per row
+hdb.probabilities; // [1, 0.9, 1, ...] — membership strength (0 = noise)
+```
+
+KMeans groups by *count* (you pick k) · DBSCAN by *density* (you pick eps) ·
+HDBSCAN by *density hierarchy* (it picks the shapes) — start with HDBSCAN
+when the clusters have uneven densities or shapes.
 
 Clustering specs support the same transformation options (`oneHot`,
 `missing`, `scale`). Normalize features (`scale: true`) before clustering so
@@ -839,6 +859,27 @@ const cluster = scan.cluster(current); // { zones, cases, expected, llr, pValue 
 const suivi = scan.fill_predict(current); // rows + cluster: boolean
 ```
 
+### `GetisOrd` — Gi* local hotspots
+
+Complementary statistic: Kulldorff answers *"where is the single most likely
+cluster?"*; **Getis-Ord Gi*** answers *"which zones are unusually hot or
+cold?"* — one result per zone, no Monte-Carlo, O(n·k).
+
+```ts
+import { GetisOrd } from "@dnax/ml";
+
+const gi = new GetisOrd({ distance: 1 });
+gi.fit(zones, { zone: "zone", coordinates: ["lon", "lat"], cases: "cases" });
+
+const results = gi.hotspots(current); // { zone, zScore, pValue, hot, cold }[]
+const flagged = gi.fill_predict(current); // rows + hot: boolean
+```
+
+- `distance` defaults to the mean nearest-neighbor distance (deterministic).
+- Works on raw counts **or** rates — pass population-adjusted rates in
+  `cases` to compare zones of different sizes fairly.
+- Uniform cases (zero variance) → z = 0, p = 1 → no hotspot.
+
 | Param               | Default     | Role                                                 |
 | ------------------- | ----------- | ---------------------------------------------------- |
 | `replications`      | `199`       | Monte-Carlo draws for the p-value (SaTScan uses 999) |
@@ -872,17 +913,17 @@ Notes:
 to an exact version — `1.1.0` — to freeze its internal serialization format):
 
 ```
-algorithm/
-├── core/            ← the SINGLE import point of @kanaries/ml
+linear/ clusters/ tree/ ensemble/       ← model wrappers (never import kml directly)
+monitoring/ scan/                       ← pure JS, zero dependency
+core/                                   ← the SINGLE import point of @kanaries/ml
 │   ├── kml.ts         (engine namespace + factories)
 │   └── state.ts       (centralized internal-state access + serialization)
-├── linear/ clusters/ tree/ ensemble/   ← wrappers (never import kml directly)
-├── monitoring/ scan/                   ← pure JS, zero dependency
-└── transformation/                     ← JSON → matrix + scaler via core
+evaluation/                             ← scoring helpers
+transformation/                         ← JSON → matrix + scaler via core
 ```
 
-Swapping the engine (or vendoring it) only requires rewriting `algorithm/core/`
-— the 25 wrappers never touch the package directly.
+Swapping the engine (or vendoring it) only requires rewriting `core/`
+— the wrappers never touch the package directly.
 
 ## License
 

@@ -12,7 +12,7 @@ supervised models. Getters `columnNames` and `droppedRows` are common to all.
 ## Linear family
 
 Common surface: `fit`, `predict`, `fill_predict`, `predictAsync`, `score`
-(R²), `mse`, `getParams()`, `setParams()`, `export`, `load`, `coef`,
+(R²), `mse`, `mae`, `getParams()`, `setParams()`, `export`, `load`, `coef`,
 `intercept`.
 
 | Class | Constructor params | Notes |
@@ -32,6 +32,7 @@ const reg = new linear.RidgeRegression({ alpha: 1 });
 reg.fit(data, { features: ["x"], target: "y" });
 reg.score(test);        // R²
 reg.mse(test);          // MSE
+reg.mae(test);          // MAE
 await reg.predictAsync(big); // worker offload
 ```
 
@@ -43,9 +44,9 @@ Common surface: `fit`, `predict`, `fill_predict`, `score`, `export`, `load`,
 | Class | Params | Notes |
 | ----- | ------ | ----- |
 | `DecisionTreeClassifier` | `max_depth`, `min_samples_split`, `criterion`, `max_features`, `randomState` | no `predict_proba` |
-| `DecisionTreeRegressor` | same | + `mse` |
+| `DecisionTreeRegressor` | same | + `mse`, `mae` |
 | `ExtraTreeClassifier` | same | + `predict_proba`, `fill_predict_proba`, `rocAucScore` |
-| `ExtraTreeRegressor` | same | + `mse` |
+| `ExtraTreeRegressor` | same | + `mse`, `mae` |
 
 ## Ensemble family
 
@@ -56,13 +57,13 @@ Common surface: `fit`, `predict`, `fill_predict`, `score`, `export`, `load`,
 | ----- | ---------- | ----- |
 | `IsolationForest` | `subsampling_size`, `tree_num`, `contamination`, `random_state` | unsupervised anomaly; `predict` (1 = anomaly) + `anomaly_score(row)` |
 | `RandomForestClassifier` | `nEstimators`, `maxDepth`, `maxFeatures`, `criterion`, `randomState` | no `predict_proba` |
-| `RandomForestRegressor` | same | + `mse` |
+| `RandomForestRegressor` | same | + `mse`, `mae` |
 | `AdaBoostClassifier` | `nEstimators`, `learningRate`, `randomState` | + proba + `rocAucScore` |
-| `AdaBoostRegressor` | same | + `mse` |
+| `AdaBoostRegressor` | same | + `mse`, `mae` |
 | `GradientBoostingClassifier` | `nEstimators`, `learningRate`, `maxDepth`, `minSamplesSplit`, `subsample`, `maxFeatures`, `randomState` | + proba + `rocAucScore` |
-| `GradientBoostingRegressor` | same | + `mse` |
+| `GradientBoostingRegressor` | same | + `mse`, `mae` |
 | `XGBoostClassifier` | `nEstimators`, `learningRate`, `maxDepth`, `lambda`, `gamma`, `minChildWeight`, `subsample`, `colsampleByTree`, `baseScore`, `randomState` | + proba + `rocAucScore` |
-| `XGBoostRegressor` | same | + `mse` |
+| `XGBoostRegressor` | same | + `mse`, `mae` |
 
 ## Clustering family
 
@@ -72,6 +73,7 @@ Spec has **no target** — only `features`.
 | ----- | ------ | ----------------- |
 | `KMeans` | `n_clusters`, `tol`, `max_iter`, `initCenters`, `random_state` | `fit`, `predict` (nearest centroid), `fit_predict`, `export`, `load` · `labels_`, `centroids`, `inertia` |
 | `DBSCAN` | `eps`, `minSamples`, `distanceType` | `fit`, `fit_predict`, `export`, `load` · `labels_` (`-1` = noise). No `predict` on new points |
+| `HDBSCAN` | `min_cluster_size`, `min_samples`, `cluster_selection_epsilon`, `metric`, `allow_single_cluster` | `fit`, `fit_predict`, `export`, `load` · `labels_`, `probabilities` (0 = noise). No `predict` on new points |
 
 ## Monitoring family
 
@@ -87,13 +89,16 @@ Spec has **no target** — only `features`.
 
 ## Spatial scan
 
-`ScanSpec` = `{ zone, coordinates: [xField, yField], population, cases }`.
+`ScanSpec` = `{ zone, coordinates: [xField, yField], population, cases }` ·
+`HotspotSpec` = `{ zone, coordinates: [xField, yField], cases }`.
 
 | Class | Params | Methods & getters |
 | ----- | ------ | ----------------- |
 | `SpatialScan` | `replications` (199), `significance` (0.05), `maxWindowFraction` (0.5), `randomState`, `clusterField` | `fit`, `cluster(data)` → `ScanCluster \| null`, `predict`, `fill_predict`, `export`, `load` · getters `zonesList`, `expectedRate` |
+| `GetisOrd` | `distance`, `significance` (0.05), `hotField` | `fit`, `hotspots(data)` → `HotspotResult[]`, `predict`, `fill_predict`, `export`, `load` · getters `zonesList`, `distance`, `significance` |
 
-`ScanCluster` = `{ zones: string[], cases, expected, llr, pValue }`.
+`ScanCluster` = `{ zones: string[], cases, expected, llr, pValue }` ·
+`HotspotResult` = `{ zone, zScore, pValue, hot, cold }`.
 
 ## Evaluation
 
@@ -117,6 +122,7 @@ Supervised models add:
 | ------ | ------- | ------------ |
 | `score(data)` | `number` — R² (regressors) / accuracy (classifiers) | all 21 supervised models |
 | `mse(data)` | `number` — mean squared error | 13 regressors |
+| `mae(data)` | `number` — mean absolute error | 13 regressors |
 | `classificationReport(data)` | `{ accuracy, precision, recall, fScore, support, confusionMatrix }` | 8 classifiers |
 | `rocAucScore(data)` | `number` — AUC (binary) | 5 classifiers with `predict_proba` |
 
@@ -131,7 +137,7 @@ interface ClusterSpec { features: string[]; options?: JsonTransformOptions }
 ```
 
 > **Supervised vs unsupervised**: supervised models (`JsonFitSpec`, 21 models)
-> have a `target` and expose `score`/`mse`/`classificationReport`. Unsupervised
+> have a `target` and expose `score`/`mse`/`mae`/`classificationReport`. Unsupervised
 > models take only `features` (`ClusterSpec`) and have no `score` — see
 > [Core concepts](/03-core-concepts) for the full classification.
 
@@ -146,6 +152,13 @@ interface ScanSpec {
   zone: string;
   coordinates: [string, string];
   population: string;
+  cases: string;
+}
+
+// Getis-Ord Gi* hotspot analysis
+interface HotspotSpec {
+  zone: string;
+  coordinates: [string, string];
   cases: string;
 }
 
