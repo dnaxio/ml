@@ -1,8 +1,8 @@
 import { kml, coefOf, fittedOf, setCoef, setFitted, classesOf } from "../core";
 import { JsonTransformer } from "../transformation/json";
 import type { JsonTransformerState } from "../transformation/json";
-import type { JsonFitSpec, JsonRow } from "../@types/json";
-import { truthValues, positiveProbabilities } from "../evaluation";
+import type { JsonFitSpec, JsonRow } from "../types/json";
+import { truthValues, positiveProbabilities, fbetaFromPrecisionRecall } from "../evaluation";
 
 /** Current version of the export file format. */
 const EXPORT_VERSION = 1;
@@ -236,11 +236,12 @@ class LogisticRegression {
   }
 
   /**
-   * Precision / recall / F1 / support + confusion matrix on rows with the
+   * Precision / recall / Fβ / support + confusion matrix on rows with the
    * target field (binary, positive class = 1).
+   * @param beta - Recall weight (default 1 = F1). Higher β prioritizes recall.
    * @param data - Row objects including the `target` field (ground truth).
    */
-  classificationReport(data: JsonRow[]): {
+  classificationReport(data: JsonRow[], beta?: number): {
     accuracy: number;
     precision: number;
     recall: number;
@@ -265,7 +266,7 @@ class LogisticRegression {
       accuracy: kml.Metrics.accuracyScore(preds, truth),
       precision: prf.precision,
       recall: prf.recall,
-      fScore: prf.fScore,
+      fScore: fbetaFromPrecisionRecall(prf.precision, prf.recall, beta ?? 1),
       support: prf.support,
       confusionMatrix: kml.Metrics.confusionMatrix(preds, truth),
     };
@@ -299,4 +300,4 @@ class LogisticRegression {
 }
 
 export { LogisticRegression };
-export type { JsonFitSpec, JsonRow } from "../@types/json";
+export type { JsonFitSpec, JsonRow } from "../types/json";

@@ -1,4 +1,4 @@
-import type { JsonRow, MonitorSpec } from "../@types/json";
+import type { JsonRow, MonitorSpec } from "../types/json";
 
 /**
  * Shared helpers for the monitoring (time-series) models: extract a numeric

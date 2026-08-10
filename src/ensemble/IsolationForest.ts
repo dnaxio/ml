@@ -1,7 +1,7 @@
 import { kml, loadModel, toJSONOf } from "../core";
 import { JsonTransformer } from "../transformation/json";
 import type { JsonTransformerState } from "../transformation/json";
-import type { ClusterSpec, JsonRow } from "../@types/json";
+import type { ClusterSpec, JsonRow } from "../types/json";
 
 /** Current version of the export file format. */
 const EXPORT_VERSION = 1;
@@ -127,4 +127,4 @@ class IsolationForest {
 }
 
 export { IsolationForest };
-export type { ClusterSpec, JsonRow } from "../@types/json";
+export type { ClusterSpec, JsonRow } from "../types/json";

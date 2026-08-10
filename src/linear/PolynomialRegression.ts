@@ -1,7 +1,7 @@
 import { kml, interceptOf, setIntercept, setFitted, asyncMode } from "../core";
 import { JsonTransformer } from "../transformation/json";
 import type { JsonTransformerState } from "../transformation/json";
-import type { JsonFitSpec, JsonRow } from "../@types/json";
+import type { JsonFitSpec, JsonRow } from "../types/json";
 import { truthValues, meanAbsoluteError } from "../evaluation";
 
 /** Current version of the export file format. */
@@ -283,4 +283,4 @@ class PolynomialRegression {
 }
 
 export { PolynomialRegression };
-export type { JsonFitSpec, JsonRow } from "../@types/json";
+export type { JsonFitSpec, JsonRow } from "../types/json";

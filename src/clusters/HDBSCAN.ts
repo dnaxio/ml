@@ -1,7 +1,7 @@
 import { kml } from "../core";
 import { JsonTransformer } from "../transformation/json";
 import type { JsonTransformerState } from "../transformation/json";
-import type { ClusterSpec, JsonRow } from "../@types/json";
+import type { ClusterSpec, JsonRow } from "../types/json";
 
 /** Current version of the export file format. */
 const EXPORT_VERSION = 1;
@@ -132,4 +132,4 @@ class HDBSCAN {
 }
 
 export { HDBSCAN };
-export type { ClusterSpec, JsonRow } from "../@types/json";
+export type { ClusterSpec, JsonRow } from "../types/json";

@@ -1,0 +1,23 @@
+
+
+/* Change the floating button color */
+.gtw-float-button {
+
+
+    text-align: center;
+    border-radius: 100%;
+    padding: 10px;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
+}
+
+
+
+/* Customize the modal */
+.gtw-modal {
+  border-radius: 2rem !important;
+}
+
+/* Style active language items */
+.gtw-language-active {
+  background: rgba(102, 126, 234, 0.1) !important;
+}

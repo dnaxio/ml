@@ -1,4 +1,4 @@
-import type { JsonRow, ScanSpec, ScanCluster } from "../@types/json";
+import type { JsonRow, ScanSpec, ScanCluster } from "../types/json";
 
 /** Current version of the export file format. */
 const EXPORT_VERSION = 1;
@@ -383,4 +383,4 @@ function mulberry32(seed: number): () => number {
 }
 
 export { SpatialScan };
-export type { ScanSpec, ScanCluster, JsonRow } from "../@types/json";
+export type { ScanSpec, ScanCluster, JsonRow } from "../types/json";

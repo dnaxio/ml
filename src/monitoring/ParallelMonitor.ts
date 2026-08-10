@@ -1,4 +1,4 @@
-import type { JsonRow, ParallelSpec } from "../@types/json";
+import type { JsonRow, ParallelSpec } from "../types/json";
 import { CUSUM } from "./CUSUM";
 import type { CUSUMParams } from "./CUSUM";
 import { EWMA } from "./EWMA";
@@ -380,4 +380,4 @@ function normInv(p: number): number {
 }
 
 export { ParallelMonitor };
-export type { ParallelSpec, JsonRow } from "../@types/json";
+export type { ParallelSpec, JsonRow } from "../types/json";

@@ -1,4 +1,4 @@
-import type { JsonRow, MonitorSpec } from "../@types/json";
+import type { JsonRow, MonitorSpec } from "../types/json";
 import { extractSeries, mean, std, median, mad } from "./series";
 
 /** Current version of the export file format. */
@@ -305,4 +305,4 @@ class EWMA {
 }
 
 export { EWMA };
-export type { MonitorSpec, JsonRow } from "../@types/json";
+export type { MonitorSpec, JsonRow } from "../types/json";

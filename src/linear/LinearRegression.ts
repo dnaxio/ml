@@ -10,7 +10,7 @@ import {
 } from "../core";
 import { JsonTransformer } from "../transformation/json";
 import type { JsonTransformerState } from "../transformation/json";
-import type { JsonFitSpec, JsonRow } from "../@types/json";
+import type { JsonFitSpec, JsonRow } from "../types/json";
 import { truthValues, meanAbsoluteError } from "../evaluation";
 
 /** Parameters that can be injected into a LinearRegression model. */
@@ -255,4 +255,4 @@ class LinearRegression {
 }
 
 export { LinearRegression };
-export type { JsonFitSpec, JsonRow } from "../@types/json";
+export type { JsonFitSpec, JsonRow } from "../types/json";

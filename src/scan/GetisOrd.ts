@@ -1,4 +1,4 @@
-import type { JsonRow, HotspotSpec } from "../@types/json";
+import type { JsonRow, HotspotSpec } from "../types/json";
 
 /** Current version of the export file format. */
 const EXPORT_VERSION = 1;
@@ -322,4 +322,4 @@ function clamp01(v: number): number {
 }
 
 export { GetisOrd };
-export type { HotspotSpec, JsonRow } from "../@types/json";
+export type { HotspotSpec, JsonRow } from "../types/json";

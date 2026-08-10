@@ -16,7 +16,7 @@ All models are available both as **flat** named exports and grouped by
 **family** (kml-style namespaces):
 
 ```ts
-import { linear, clusters, tree, ensemble, monitoring, scan } from "@dnax/ml";
+import { linear, clusters, tree, ensemble, monitoring, scan, neighbors, featureSelection, evaluation } from "@dnax/ml";
 
 const reg = new linear.LinearRegression();
 const km = new clusters.KMeans({ n_clusters: 3 });
@@ -24,6 +24,8 @@ const dt = new tree.DecisionTreeClassifier();
 const iso = new ensemble.IsolationForest();
 const cusum = new monitoring.CUSUM();
 const scanModel = new scan.SpatialScan();
+const knn = new neighbors.KNeighborsClassifier();
+evaluation.compareModels({ ... }, data, spec); // scoped evaluation helpers
 
 // flat imports also work:
 import { LinearRegression, KMeans } from "@dnax/ml";
@@ -43,15 +45,25 @@ reg.mae(data); // number — mean absolute error (0 = perfect)
 
 // Classifiers → accuracy + full report
 clf.score(data); // number — accuracy
-clf.classificationReport(data); // { accuracy, precision, recall, fScore,
-//   support, confusionMatrix }
+clf.classificationReport(data, 2); // { ..., fScore: F2 } — beta weights recall
+//   (default 1 = F1; 2 = recall twice as important; 0.5 = precision twice as important)
 
 // Classifiers with predict_proba (LogisticRegression, ExtraTreeClassifier,
 // AdaBoostClassifier, GradientBoostingClassifier, XGBoostClassifier) → ROC
 clf.rocAucScore(data); // number — AUC (1 = perfect, 0.5 = random, binary only)
+
+// Metric library — pure functions on arrays
+import { rmse, mape, mcc, balancedAccuracy, logLoss, prAucScore, optimalThreshold } from "@dnax/ml";
+rmse(preds, truth);          // √MSE (target units)
+mape(preds, truth);          // average % off
+mcc(preds, truth);           // Matthews −1..+1 (imbalance)
+balancedAccuracy(preds, truth); // macro recall
+logLoss(truth, proba);       // cross-entropy (proba = positive class)
+prAucScore(truth, proba);    // PR-AUC — the imbalance-friendly curve metric
+optimalThreshold(truth, proba); // Youden's J decision threshold
 ```
 
-Implemented on: 13 regressors (`score`/`mse`/`mae`) and 8 classifiers
+Implemented on: 14 regressors (`score`/`mse`/`mae`) and 9 classifiers
 (`score`/`classificationReport`, + `rocAucScore` on the 5 with `predict_proba`).
 Clustering, IsolationForest, monitoring and scan have no target → no `score`.
 
@@ -60,7 +72,7 @@ The ground truth convention matches kml: predictions first, truth second.
 ### Splitting & cross-validation
 
 ```ts
-import { trainTestSplit, crossValScore } from "@dnax/ml";
+import { trainTestSplit, crossValScore, compareModels, detectTask } from "@dnax/ml";
 
 // Train/test split (JSON-first, seeded, stratified by a field)
 const { train, test } = trainTestSplit(data, {
@@ -77,9 +89,23 @@ const scores = crossValScore(
   () => new LinearRegression(), // fresh model per fold
   data,
   { features: ["x"], target: "y" },
-  { cv: 5, scoring: "score", randomState: 42 }, // 'score' | 'mse' | 'rocAucScore'
+  { cv: 5, scoring: "score", randomState: 42 }, // 'score' | 'mse' | 'mae' | 'rocAucScore'
 );
 // → [0.91, 0.88, 0.93, ...] — one score per fold
+
+// Model leaderboard — train, evaluate and rank several models on one case
+const leaderboard = compareModels(
+  {
+    linear: () => new LinearRegression(),
+    ridge: () => new RidgeRegression({ alpha: 1 }),
+    gbr: () => new GradientBoostingRegressor({ randomState: 42 }),
+  },
+  data,
+  { features: ["x"], target: "y" }, // same spec (scale, noise…) for every model
+  { cv: 5, scoring: "score", randomState: 42 },
+);
+// → [{ name, mean, std, scores }] — sorted best first (ascending for mse/mae)
+console.log(detectTask(data, { features: ["x"], target: "y" })); // 'regression'
 ```
 
 `crossValScore` stratifies automatically when the target is discrete with
@@ -468,6 +494,59 @@ when the clusters have uneven densities or shapes.
 Clustering specs support the same transformation options (`oneHot`,
 `missing`, `scale`). Normalize features (`scale: true`) before clustering so
 distances behave consistently.
+
+## Neighbors (instance-based)
+
+No model is learned: predictions come from the **nearest labeled examples**.
+A simple and strong non-parametric baseline — if kNN beats your parametric
+models, the relationship is very local. **Distance-based**: use
+`options: { scale: true }`.
+
+```ts
+import { KNeighborsClassifier, KNeighborsRegressor } from "@dnax/ml";
+
+const knn = new KNeighborsClassifier({ kNeighbors: 5 });
+knn.fit(data, { features: ["age", "solde"], target: "achete" });
+knn.predict(data);           // labels
+knn.classificationReport(data); // precision / recall / F1
+
+const knnR = new KNeighborsRegressor({ nNeighbors: 5 });
+knnR.fit(data, { features: ["age"], target: "salaire" });
+knnR.score(data); // R²
+```
+
+## Feature selection
+
+Rank or select the informative columns before training — lower cost, better
+interpretability, less overfitting. `featureSelection.*` works on JSON rows
+with a `JsonFitSpec` (numeric/boolean features only).
+
+```ts
+import { featureSelection } from "@dnax/ml";
+
+// 1) Univariate ranking — most informative first
+const ranking = featureSelection.mutualInfoClassif(data, {
+  features: ["age", "solde", "nb_visites", "inutile"],
+  target: "achete",
+});
+// → [{ feature: "age", score: 0.42 }, { feature: "inutile", score: 0.01 }, ...]
+
+// 2) Model-based selection — keep what the model finds important
+const sel = new featureSelection.SelectFromModel({
+  estimator: new LassoRegression({ alpha: 1 }),
+  threshold: "mean",
+});
+sel.fit(data, { features: ["salaire", "bruit"], target: "age" });
+sel.selectedFeatures; // ["salaire"]
+
+// 3) Feed the reduced spec to a fresh model
+clf.fit(data, { features: sel.selectedFeatures, target: "achete" });
+```
+
+- `chi2` / `fClassif` (classification targets) → score + `pValue`
+- `mutualInfoClassif` / `mutualInfoRegression` → capture **non-linear** links
+- `SelectFromModel({ estimator, threshold, maxFeatures })` → `support`,
+  `selectedFeatures`, `featureScores`, `fittedEstimator`
 
 ## Tree models
 

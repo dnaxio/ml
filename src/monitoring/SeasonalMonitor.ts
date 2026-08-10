@@ -1,4 +1,4 @@
-import type { JsonRow, SeasonalSpec } from "../@types/json";
+import type { JsonRow, SeasonalSpec } from "../types/json";
 import { CUSUM } from "./CUSUM";
 import type { CUSUMParams } from "./CUSUM";
 import { EWMA } from "./EWMA";
@@ -298,4 +298,4 @@ class SeasonalMonitor {
 }
 
 export { SeasonalMonitor };
-export type { SeasonalSpec, JsonRow } from "../@types/json";
+export type { SeasonalSpec, JsonRow } from "../types/json";

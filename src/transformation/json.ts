@@ -3,7 +3,7 @@ import type {
   TransformerSpec,
   JsonRow,
   JsonTransformResult,
-} from "../@types/json";
+} from "../types/json";
 
 /**
  * Transforms JSON rows (row objects) into a feature matrix `number[][]`

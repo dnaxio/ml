@@ -29,6 +29,15 @@ import { ParallelMonitor } from "./monitoring/ParallelMonitor";
 import { SeasonalMonitor } from "./monitoring/SeasonalMonitor";
 import { SpatialScan } from "./scan/SpatialScan";
 import { GetisOrd } from "./scan/GetisOrd";
+import { KNeighborsClassifier } from "./neighbors/KNeighborsClassifier";
+import { KNeighborsRegressor } from "./neighbors/KNeighborsRegressor";
+import { SelectFromModel } from "./featureSelection/SelectFromModel";
+import {
+  chi2,
+  fClassif,
+  mutualInfoClassif,
+  mutualInfoRegression,
+} from "./featureSelection/univariate";
 
 // Namespaced access (kml-style): new linear.LinearRegression(), new clusters.KMeans(), ...
 import * as linear from "./linear";
@@ -37,6 +46,9 @@ import * as tree from "./tree";
 import * as ensemble from "./ensemble";
 import * as monitoring from "./monitoring";
 import * as scan from "./scan";
+import * as neighbors from "./neighbors";
+import * as featureSelection from "./featureSelection";
+import * as evaluation from "./evaluation";
 
 export {
   LinearRegression,
@@ -70,15 +82,27 @@ export {
   SeasonalMonitor,
   SpatialScan,
   GetisOrd,
+  KNeighborsClassifier,
+  KNeighborsRegressor,
+  SelectFromModel,
+  chi2,
+  fClassif,
+  mutualInfoClassif,
+  mutualInfoRegression,
 };
 
-export { linear, clusters, tree, ensemble, monitoring, scan };
+export { linear, clusters, tree, ensemble, monitoring, scan, neighbors, featureSelection, evaluation };
 
-export { trainTestSplit, crossValScore, predictStream, fillPredictStream, meanAbsoluteError } from "./evaluation";
+export { trainTestSplit, crossValScore, compareModels, detectTask, predictStream, fillPredictStream, meanAbsoluteError, fbetaFromPrecisionRecall, rmse, mape, medianAbsoluteError, mcc, balancedAccuracy, logLoss, prAucScore, rocCurve, optimalThreshold } from "./evaluation";
 export type {
   TrainTestSplitOptions,
   CrossValOptions,
+  CompareModelsOptions,
+  ModelBenchmark,
   StreamOptions,
+  BalancedAccuracyOptions,
+  LogLossOptions,
+  CurveResult,
 } from "./evaluation";
 export type { LinearParams } from "./linear/LinearRegression";
 export type { LogisticParams } from "./linear/LogisticRegression";
@@ -111,6 +135,10 @@ export type { ParallelMonitorParams } from "./monitoring/ParallelMonitor";
 export type { SeasonalMonitorParams } from "./monitoring/SeasonalMonitor";
 export type { SpatialScanParams } from "./scan/SpatialScan";
 export type { GetisOrdParams, HotspotResult } from "./scan/GetisOrd";
+export type { KNeighborsClassifierParams } from "./neighbors/KNeighborsClassifier";
+export type { KNeighborsRegressorParams } from "./neighbors/KNeighborsRegressor";
+export type { SelectFromModelParams, SelectableEstimator } from "./featureSelection/SelectFromModel";
+export type { UnivariateResult, MutualInfoOptions } from "./featureSelection/univariate";
 export type {
   JsonFitSpec,
   ClusterSpec,
@@ -123,4 +151,4 @@ export type {
   JsonRow,
   JsonTransformOptions,
   JsonTransformResult,
-} from "./@types/json";
+} from "./types/json";

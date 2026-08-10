@@ -1,5 +1,5 @@
 import { kml } from "../core";
-import type { JsonRow, JsonFitSpec } from "../@types/json";
+import type { JsonRow, JsonFitSpec } from "../types/json";
 
 /**
  * Shared helpers for model evaluation (`score`, `mse`, `classificationReport`,
@@ -36,6 +36,212 @@ export function meanAbsoluteError(preds: number[], truth: number[]): number {
     preds.reduce((sum, p, i) => sum + Math.abs(p - (truth[i] ?? 0)), 0) /
     preds.length
   );
+}
+
+/**
+ * F-beta score computed from precision and recall. The `beta` parameter
+ * weights recall relative to precision (β = 1 → F1, β = 2 → recall twice as
+ * important, β = 0.5 → precision twice as important). Used by
+ * `classificationReport(data, beta)` on the classifiers.
+ * @param precision - Precision (TP / (TP + FP)).
+ * @param recall - Recall (TP / (TP + FN)).
+ * @param beta - Recall weight. Default: 1 (F1).
+ * @returns Fβ in [0, 1] (0 when precision or recall is 0).
+ */
+export function fbetaFromPrecisionRecall(
+  precision: number,
+  recall: number,
+  beta = 1,
+): number {
+  const b2 = beta * beta;
+  const denom = b2 * precision + recall;
+  if (denom === 0) return 0;
+  return ((1 + b2) * (precision * recall)) / denom;
+}
+
+/**
+ * Root mean squared error: sqrt(MSE), in the **same units as the target** —
+ * the most reported regression metric in production.
+ * @param preds - Model predictions.
+ * @param truth - Ground-truth values.
+ * @returns RMSE (0 = perfect).
+ */
+export function rmse(preds: number[], truth: number[]): number {
+  checkLengths(preds, truth, "rmse");
+  return kml.Metrics.rootMeanSquaredError(preds, truth);
+}
+
+/**
+ * Mean absolute percentage error: how many percent off on average
+ * (sklearn's epsilon-clamped formula: |y − p| / max(|y|, eps)).
+ * @param preds - Model predictions.
+ * @param truth - Ground-truth values (0-values are clamped to machine eps).
+ * @returns MAPE as a fraction (0 = perfect, 0.5 = 50% off on average).
+ */
+export function mape(preds: number[], truth: number[]): number {
+  checkLengths(preds, truth, "mape");
+  return kml.Metrics.meanAbsolutePercentageError(preds, truth);
+}
+
+/**
+ * Median absolute error: the median of |y − p| — robust to a few large
+ * outliers that inflate MAE.
+ * @param preds - Model predictions.
+ * @param truth - Ground-truth values.
+ * @returns Median AE (0 = perfect).
+ */
+export function medianAbsoluteError(preds: number[], truth: number[]): number {
+  checkLengths(preds, truth, "medianAbsoluteError");
+  return kml.Metrics.medianAbsoluteError(preds, truth);
+}
+
+/**
+ * Matthews correlation coefficient: the single most robust number for
+ * (imbalanced) classification — −1 (inverted), 0 (random), +1 (perfect).
+ * Preferred over F1/accuracy on imbalanced data (sklearn's recommendation).
+ * @param preds - Predicted labels (0/1).
+ * @param truth - Ground-truth labels.
+ * @returns MCC in [−1, 1].
+ */
+export function mcc(preds: number[], truth: number[]): number {
+  checkLengths(preds, truth, "mcc");
+  return kml.Metrics.matthewsCorrcoef(preds, truth);
+}
+
+/** Options for `balancedAccuracy`. */
+export interface BalancedAccuracyOptions {
+  /** Chance-adjust so random performance scores 0 (sklearn `adjusted`). */
+  adjusted?: boolean;
+}
+
+/**
+ * Balanced accuracy: macro-average of per-class recall — the "honest"
+ * accuracy when one class dominates.
+ * @param preds - Predicted labels.
+ * @param truth - Ground-truth labels.
+ * @param options - Chance adjustment.
+ * @returns Balanced accuracy in [0, 1].
+ */
+export function balancedAccuracy(
+  preds: number[],
+  truth: number[],
+  options?: BalancedAccuracyOptions,
+): number {
+  checkLengths(preds, truth, "balancedAccuracy");
+  return kml.Metrics.balancedAccuracyScore(preds, truth, options);
+}
+
+/** Options for `logLoss`. */
+export interface LogLossOptions {
+  /** Probability clipping epsilon ('auto' = machine epsilon). */
+  eps?: number | "auto";
+  /** Mean per-sample (default) or sum. */
+  normalize?: boolean;
+  /** Explicit class labels (required when truth has a single class). */
+  labels?: number[];
+}
+
+/**
+ * Log loss (cross-entropy): punishes confident **and wrong** probabilities.
+ * Needs a `predict_proba` model. Truth first, probabilities second
+ * (kml/sklearn convention for score-based metrics).
+ * @param truth - Ground-truth labels.
+ * @param proba - Positive-class probabilities (1-D) or class matrix (2-D).
+ * @param options - Clipping, normalization, labels.
+ * @returns Log loss (0 = perfect calibration).
+ */
+export function logLoss(
+  truth: number[],
+  proba: number[] | number[][],
+  options?: LogLossOptions,
+): number {
+  checkLengths(truth, proba, "logLoss");
+  return kml.Metrics.logLoss(truth, proba, options);
+}
+
+/** One point set of a curve (ROC or PR). */
+export interface CurveResult {
+  /** False positive rate (ROC) or precision (PR), per threshold. */
+  fpr?: number[];
+  tpr?: number[];
+  precision?: number[];
+  recall?: number[];
+  /** Decision thresholds (one per point). */
+  thresholds: number[];
+}
+
+/**
+ * ROC curve points (FPR/TPR per threshold) — the full curve, not just the
+ * AUC, for plots and threshold selection.
+ * @param truth - Ground-truth labels.
+ * @param proba - Positive-class probabilities.
+ * @returns `{ fpr, tpr, thresholds }` (truth first, kml convention).
+ */
+export function rocCurve(
+  truth: number[],
+  proba: number[],
+): { fpr: number[]; tpr: number[]; thresholds: number[] } {
+  checkLengths(truth, proba, "rocCurve");
+  return kml.Metrics.rocCurve(truth, proba, 1);
+}
+
+/**
+ * Precision-Recall AUC (average precision): the right curve metric for
+ * **imbalanced** detection — it drops when false alarms grow, unlike ROC-AUC.
+ * sklearn-consistent recall-weighted interpolation.
+ * @param truth - Ground-truth labels.
+ * @param proba - Positive-class probabilities.
+ * @returns Average precision in [0, 1] (1 = perfect ranking).
+ */
+export function prAucScore(truth: number[], proba: number[]): number {
+  checkLengths(truth, proba, "prAucScore");
+  const { precision, recall } = kml.Metrics.precisionRecallCurve(
+    truth,
+    proba,
+    1,
+  );
+  // kml returns the curve in descending-threshold order (recall non-increasing).
+  // Walk it backwards, from recall 0 up, like sklearn's average_precision_score:
+  // AP = Σ (R_n − R_{n−1}) · P_n with the implicit start (recall 0, precision 1).
+  let auc = 0;
+  let prevRecall = 0;
+  for (let i = precision.length - 1; i >= 0; i--) {
+    auc += (recall[i]! - prevRecall) * (precision[i] ?? 0);
+    prevRecall = recall[i]!;
+  }
+  return auc;
+}
+
+/**
+ * Optimal decision threshold via Youden's J (maximize tpr − fpr on the ROC
+ * curve). Use it to turn probabilities into alerts: predict positive when
+ * proba ≥ returned threshold.
+ * @param truth - Ground-truth labels.
+ * @param proba - Positive-class probabilities.
+ * @returns The threshold maximizing tpr − fpr.
+ */
+export function optimalThreshold(truth: number[], proba: number[]): number {
+  checkLengths(truth, proba, "optimalThreshold");
+  const { fpr, tpr, thresholds } = kml.Metrics.rocCurve(truth, proba, 1);
+  let best = 0;
+  let bestJ = -Infinity;
+  for (let i = 0; i < thresholds.length; i++) {
+    const j = (tpr[i] ?? 0) - (fpr[i] ?? 0);
+    if (j > bestJ) {
+      bestJ = j;
+      best = thresholds[i] ?? 0;
+    }
+  }
+  return best;
+}
+
+/** Guards the array lengths of the pure metric helpers. */
+function checkLengths(a: unknown[], b: unknown[], name: string): void {
+  if (a.length !== b.length) {
+    throw new Error(
+      `${name}: predictions (${a.length}) and truth (${b.length}) must have the same length.`,
+    );
+  }
 }
 
 /**
@@ -191,6 +397,7 @@ interface EvaluableModel {
   fit(data: JsonRow[], spec: JsonFitSpec): void;
   score(data: JsonRow[]): number;
   mse?(data: JsonRow[]): number;
+  mae?(data: JsonRow[]): number;
   rocAucScore?(data: JsonRow[]): number;
 }
 
@@ -202,7 +409,7 @@ export interface CrossValOptions {
    * Evaluation method called on each held-out fold. Default: 'score'
    * (R² on regressors, accuracy on classifiers).
    */
-  scoring?: "score" | "mse" | "rocAucScore";
+  scoring?: "score" | "mse" | "mae" | "rocAucScore";
   /**
    * Stratify folds by the target field (requires ≥ cv samples per class).
    * Default: auto — stratified when the target is discrete with enough
@@ -279,10 +486,110 @@ export function crossValScore(
     const scorer = (model as unknown as Record<string, unknown>)[scoring];
     if (typeof scorer !== "function") {
       throw new Error(
-        `Scoring method "${scoring}" is not available on this model (choose 'score', 'mse' or 'rocAucScore').`,
+        `Scoring method "${scoring}" is not available on this model (choose 'score', 'mse', 'mae' or 'rocAucScore').`,
       );
     }
     scores.push((scorer as (d: JsonRow[]) => number).call(model, testData));
   }
   return scores;
+}
+
+/**
+ * Detects the ML task from the target field: `'classification'` when the
+ * target is boolean or has few unique values (≤ 10), `'regression'`
+ * otherwise. Useful to pick a model family / default scoring for a case.
+ * @param data - Row objects including the `target` field.
+ * @param spec - The fit specification (features + target + options).
+ * @returns 'classification' | 'regression'.
+ */
+export function detectTask(
+  data: JsonRow[],
+  spec: JsonFitSpec,
+): "classification" | "regression" {
+  const n = data.length;
+  const seen = new Set<string>();
+  let allBoolean = true;
+  for (const row of data) {
+    const v = row[spec.target];
+    if (typeof v !== "boolean") allBoolean = false;
+    seen.add(typeof v === "boolean" ? (v ? "1" : "0") : String(v));
+  }
+  // Boolean targets are always classification.
+  if (allBoolean && n > 0) return "classification";
+  // Discrete (≤ 10 unique values and a minority of the rows) → classification.
+  if (seen.size <= 10 && seen.size <= Math.max(2, Math.floor(n / 2))) {
+    return "classification";
+  }
+  return "regression";
+}
+
+/** Options for `compareModels`. */
+export interface CompareModelsOptions {
+  /** Number of folds per model. Default: 5. */
+  cv?: number;
+  /**
+   * Evaluation method per fold. Default: 'score' — each model uses its own
+   * `score()`: R² for regressors, accuracy for classifiers (the ML case is
+   * detected per model).
+   */
+  scoring?: "score" | "mse" | "mae" | "rocAucScore";
+  /** Stratify folds by the target field. Default: auto (see crossValScore). */
+  stratify?: boolean;
+  /** Seed for reproducible folds. */
+  randomState?: number;
+}
+
+/** One model's result in the leaderboard. */
+export interface ModelBenchmark {
+  /** Model name (key of the models map). */
+  name: string;
+  /** Mean score across folds. Higher is better for 'score'/'rocAucScore', lower for 'mse'/'mae'. */
+  mean: number;
+  /** Standard deviation across folds (lower = more stable). */
+  std: number;
+  /** One score per fold. */
+  scores: number[];
+}
+
+/**
+ * Trains, evaluates and **ranks** several models on the same case (same
+ * data + spec + folds). Each model gets a fresh fit per fold via
+ * `crossValScore`, the same spec (so `options.scale` etc. are applied
+ * equally to every model), and the results are sorted into a leaderboard.
+ *
+ * Use models of the same family — all regressors (R² comparable) or all
+ * classifiers (accuracy comparable).
+ * @param models - Named factories, e.g. `{ ridge: () => new RidgeRegression({ alpha: 1 }) }`.
+ * @param data - Row objects including the `target` field.
+ * @param spec - The fit specification (features + target + options).
+ * @param options - Folds, scoring method, stratification, seed.
+ * @returns One benchmark per model, sorted best first (ascending for 'mse'/'mae').
+ */
+export function compareModels(
+  models: Record<string, () => EvaluableModel>,
+  data: JsonRow[],
+  spec: JsonFitSpec,
+  options: CompareModelsOptions = {},
+): ModelBenchmark[] {
+  const entries = Object.entries(models);
+  if (entries.length === 0) {
+    throw new Error("compareModels requires at least one model.");
+  }
+  const scoring = options.scoring ?? "score";
+  const higherIsBetter = scoring !== "mse" && scoring !== "mae";
+  const ranked = entries.map(([name, create]) => {
+    const scores = crossValScore(create, data, spec, {
+      cv: options.cv,
+      scoring,
+      stratify: options.stratify,
+      randomState: options.randomState,
+    });
+    const mean = scores.reduce((a, b) => a + b, 0) / scores.length;
+    const variance =
+      scores.reduce((a, s) => a + (s - mean) ** 2, 0) / scores.length;
+    return { name, mean, std: Math.sqrt(variance), scores };
+  });
+  return ranked.sort((a, b) =>
+    higherIsBetter ? b.mean - a.mean : a.mean - b.mean,
+  );
 }
