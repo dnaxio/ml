@@ -1,0 +1,3183 @@
+# Architecture
+
+`@dnax/ml` is a **JSON-first facade** over the `@kanaries/ml` engine (pinned
+to an exact version — `1.1.0` — to freeze its internal serialization format):
+all direct access to the engine is centralized in a single internal module
+(the **core facade**), so swapping the engine — or vendoring it — only
+requires rewriting that one layer, never the models themselves.
+
+## Dependencies
+
+`@dnax/ml` declares a single runtime dependency: `@kanaries/ml` (pinned to an
+exact version), which is itself **dependency-free** — the whole runtime
+footprint is one package. The monitoring and scan families are pure
+JavaScript with zero dependencies.
+
+## Design principles
+
+1. **JSON-first** — the same shape in and out: `fit(data, spec)`, rows come
+   in, rows (enriched) come out. No manual matrix conversion.
+2. **sklearn vocabulary** — `coef`, `intercept`, `features` / `target`,
+   `fit` / `predict` / `score`, `getParams()` / `setParams()`.
+3. **One API everywhere** — every model exposes `fit` → `predict` →
+   `fill_predict` → `export` / `load`. A single pattern to learn.
+4. **Versioned persistence** — every export is tagged with a format version;
+   `load` refuses incompatible files.
+5. **Deterministic by default** — alphabetical feature ordering, seeded
+   randomness everywhere (`randomState` / `random_state` / `noiseSeed`).
+
+## License
+
+MIT
+
+
+# Core Concepts
+
+## The idea
+
+Every model in `@dnax/ml` follows the same contract:
+
+```ts
+model.fit(data, spec);       // learn from JSON rows
+model.predict(data);         // predict on new rows
+model.fill_predict(data);    // predict + add the result into each row
+```
+
+`data` is an **array of row objects** and `spec` describes which fields to
+use. There is never a manual matrix conversion.
+
+## The spec
+
+### Supervised — `JsonFitSpec`
+
+```ts
+reg.fit(data, {
+  features: ["note", "admis"], // fields used as features (X)
+  target: "note",              // single output field (Y)
+  options: {
+    oneHot: false,   // encode categorical strings as columns (default: false)
+    dropFirst: true, // drop first category in one-hot (default: true)
+    missing: "throw",// 'throw' | 'fill0' | 'drop' (default: 'throw')
+    scale: false,    // standardize features (StandardScaler) (default: false)
+    noise: 0.05,     // Gaussian jittering, training only (default: none)
+    noiseSeed: 42,   // seed for the noise generator (default: random)
+  },
+});
+```
+
+### Unsupervised — `ClusterSpec`
+
+Clustering has **no target** — the spec only selects features:
+
+```ts
+km.fit(data, { features: ["age", "solde"] });
+```
+
+### Monitoring — `MonitorSpec`
+
+```ts
+cusum.fit(data, { field: "ventes" });               // one series
+cusum.fit(data, { field: "ventes", missing: "fill" }); // carry-forward gaps
+```
+
+### Parallel monitoring — `ParallelSpec`
+
+```ts
+pm.fit(days, { fields: ["paracetamol", "ibuprofen"], missing: "fill" });
+// per-field chart overrides: { fields, params: { paracetamol: { k: 1, h: 10 } } }
+```
+
+### Seasonal monitoring — `SeasonalSpec`
+
+```ts
+sm.fit(days, { field: "ventes", dateField: "date" }); // weekly profile
+```
+
+### Spatial scan — `ScanSpec`
+
+```ts
+scan.fit(zones, {
+  zone: "zone",
+  coordinates: ["lon", "lat"],
+  population: "population",
+  cases: "cases",
+});
+```
+
+### Getis-Ord hotspots — `HotspotSpec`
+
+Same geometry but **no population** — works on counts or rates:
+
+```ts
+gi.fit(zones, { zone: "zone", coordinates: ["lon", "lat"], cases: "cases" });
+```
+
+## Supervised vs unsupervised models
+
+| Category             | Models                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Spec                                                                        | Goal                                                         | Evaluation                                                     |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- | ------------------------------------------------------------ | -------------------------------------------------------------- |
+| **Supervised** (23)  | **14 regressors**: `LinearRegression`, `RidgeRegression`, `LassoRegression`, `ElasticNet`, `RANSACRegressor`, `PoissonRegressor`, `PolynomialRegression`, `DecisionTreeRegressor`, `ExtraTreeRegressor`, `RandomForestRegressor`, `AdaBoostRegressor`, `GradientBoostingRegressor`, `XGBoostRegressor`, `KNeighborsRegressor` · **9 classifiers**: `LogisticRegression`, `RidgeClassifier`, `DecisionTreeClassifier`, `ExtraTreeClassifier`, `RandomForestClassifier`, `AdaBoostClassifier`, `GradientBoostingClassifier`, `XGBoostClassifier`, `KNeighborsClassifier` | `{ features, target }`                                                      | learn Y from X, predict new Y                                | `score`, `mse`, `mae`, `classificationReport`, `rocAucScore` ✅ |
+| **Unsupervised** (4) | `KMeans`, `DBSCAN`, `HDBSCAN` (clustering) · `IsolationForest` (anomaly detection)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | `{ features }` only — no target                                             | find groups / flag anomalies                                 | ❌ no `score`                                                   |
+| **Monitoring** (4)   | `CUSUM`, `EWMA`, `ParallelMonitor`, `SeasonalMonitor`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | `{ field }` — one series                                                    | detect when a series drifts from its normal                  | `update(row)` for real-time                                    |
+| **Spatial scan** (2) | `SpatialScan` (Kulldorff) · `GetisOrd` (Gi\* hotspots)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | `{ zone, coordinates, population, cases }` / `{ zone, coordinates, cases }` | detect statistically significant spatial clusters / hotspots | `cluster(data)` → p-value · `hotspots(data)` → z-scores        |
+
+The rule of thumb: **supervised** models have a `target` in the spec and can be
+scored against ground truth; **unsupervised** models only take `features` and
+have no `score`. Monitoring and spatial scan have no target either — they
+answer different questions (time drift / spatial clusters).
+
+## Value encoding
+
+| JSON value              | Encoded as                                           |
+| ----------------------- | ---------------------------------------------------- |
+| `number`                | as-is                                                |
+| `boolean`               | `1` / `0`                                            |
+| numeric string (`"42"`) | `Number("42")`                                       |
+| non-numeric string      | one-hot column(s) if `oneHot: true`, otherwise error |
+| `undefined` / `null`    | depends on `missing`                                 |
+
+Fields not selected in `features` / `target` are ignored.
+
+Features are sorted **alphabetically** (and one-hot categories as well), so
+permuting the `features` array has no effect on the column layout — the same
+data always produces the same matrix, coefficients, and predictions.
+
+## Missing-value strategies
+
+| Option              | Behavior                                         |
+| ------------------- | ------------------------------------------------ |
+| `'throw'` (default) | throws an explicit error                         |
+| `'fill0'`           | fills the column with `0`, the row is kept       |
+| `'drop'`            | removes the whole row (tracked in `droppedRows`) |
+
+## Scoped imports
+
+All models are available as **flat** named exports and grouped by **family**
+(kml-style namespaces):
+
+```ts
+import { linear, clusters, tree, ensemble, monitoring, scan, neighbors, featureSelection, evaluation } from "@dnax/ml";
+
+const reg = new linear.LinearRegression();
+const km = new clusters.KMeans({ n_clusters: 3 });
+const dt = new tree.DecisionTreeClassifier();
+const iso = new ensemble.IsolationForest();
+const cusum = new monitoring.CUSUM();
+const scanModel = new scan.SpatialScan();
+const knn = new neighbors.KNeighborsClassifier();
+evaluation.mcc(preds, truth); // evaluation helpers (compareModels, rmse, ...)
+
+// flat imports also work:
+import { LinearRegression, KMeans } from "@dnax/ml";
+```
+
+## The common API surface
+
+Every model shares the same core loop, and each family layers its own extras
+on top.
+
+### Universal (every model)
+
+- `fit(data, spec)` — train
+- `predict(data)` → `number[]` — predict
+- `fill_predict(data)` → `JsonRow[]` — predict **and** fill the result into
+  each row (new objects, the input is not mutated; a boolean target produces
+  `true`/`false`, a numeric one stays numeric)
+- `export(name)` / `load(name)` — async persistence to `<name>.json`
+- getters `columnNames` (X column names — interpret `coef`) and `droppedRows`
+  (rows removed by the `'drop'` missing strategy)
+
+### Supervised evaluation
+
+Scored on rows that include the `target` field (ground truth), reusing the
+transformation learned at fit time:
+
+| Method                              | Returns                                    | Availability                  |
+| ----------------------------------- | ------------------------------------------ | ----------------------------- |
+| `score(data)`                       | R² (regressors) / accuracy (classifiers)   | all 23 supervised models      |
+| `mse(data)` / `mae(data)`           | mean squared / absolute error              | 14 regressors                 |
+| `classificationReport(data, beta?)` | precision / recall / Fβ / confusion matrix | 9 classifiers                 |
+| `rocAucScore(data)`                 | AUC (binary)                               | 5 models with `predict_proba` |
+
+### Linear & neighbors
+
+- `getParams()` / `setParams()` — read / inject learned parameters
+  (sklearn-style; `setParams` rebuilds the model unfitted — refit before
+  `predict`)
+- `predictAsync(data)` — offload the matrix-vector product to a worker
+  (8 linear models — all but `LogisticRegression`)
+
+### Probability models
+
+`LogisticRegression`, `ExtraTreeClassifier`, `AdaBoostClassifier`,
+`GradientBoostingClassifier` and `XGBoostClassifier` add
+`predict_proba(data)` → `number[][]` and `fill_predict_proba(data)`.
+
+### Trees & ensembles
+
+- `featureImportances` — how much each feature drives the splits (all tree
+  and ensemble models **except** `IsolationForest`)
+- `IsolationForest` adds `anomaly_score(row)` (continuous); its `predict`
+  returns 1 = anomaly
+
+### Clustering
+
+- `fit_predict(data)` — labels for the training rows in one call
+- getters `labels_`, `centroids`, `inertia` (KMeans), `probabilities`
+  (HDBSCAN, 0 ≈ noise)
+- `DBSCAN` / `HDBSCAN` have &#x2A;*no `predict`** on new points
+
+### Monitoring
+
+- `predict` → alerts per point · `scores` → the raw statistic
+- `changePoint(data)` (CUSUM) · `limits(data)` (EWMA) · `alertFields(data)`
+  (ParallelMonitor) · `dayProfile` (SeasonalMonitor)
+- `update(row)` / `reset()` — online monitoring, one row at a time
+
+### Spatial scan
+
+- `cluster(data)` → `ScanCluster | null` (SpatialScan)
+- `hotspots(data)` → `HotspotResult[]` (GetisOrd)
+- `predict` / `fill_predict` flag the significant zones
+
+### Streaming & evaluation helpers
+
+Memory-bounded inference and model comparison, exported from the package
+root:
+
+```ts
+import { trainTestSplit, crossValScore, compareModels, detectTask, predictStream, fillPredictStream } from "@dnax/ml";
+
+const { train, test } = trainTestSplit(data, { testSize: 0.3, randomState: 42 });
+const scores = crossValScore(() => new LinearRegression(), data, spec, { cv: 5 });
+const ranking = compareModels({ linear: () => new LinearRegression() }, data, spec, { cv: 5 });
+detectTask(data, spec); // "classification" | "regression"
+
+for await (const pred of predictStream(model, rows)) { /* one per row */ }
+await fillPredictStream(model, rows, (row) => { /* enriched row */ });
+```
+
+Plus a pure metric library (`rmse`, `mape`, `medianAbsoluteError`, `mcc`,
+`balancedAccuracy`, `logLoss`, `prAucScore`, `rocCurve`, `optimalThreshold`,
+`meanAbsoluteError`, `fbetaFromPrecisionRecall`) and feature selection
+(`featureSelection.chi2` / `fClassif` / `mutualInfoClassif` /
+`mutualInfoRegression` / `SelectFromModel`).
+
+## Noise (data jittering)
+
+`options.noise` adds **Gaussian noise** `N(0, noise)` to continuous feature
+values **during training only** — a light data augmentation / regularizer:
+
+- Applied **after scaling**, so with `scale: true` a value of `0.05` means 5%
+  of a column standard deviation.
+- **One-hot columns are never perturbed**.
+- **Inference stays deterministic**: `predict` never adds noise.
+- `noiseSeed` makes the noise reproducible; the config survives `export`/`load`.
+
+```ts
+const robust = new LinearRegression();
+robust.fit(data, {
+  features: ["prix_affiche", "quantite"],
+  target: "prix_facture",
+  options: { scale: true, noise: 0.05, noiseSeed: 42 },
+});
+```
+
+**When to use it**: linear models (regularizer against memorization). It is
+**neutral for trees/boosting** and **counter-productive for IsolationForest**
+(it blurs the anomalies). For KMeans/DBSCAN it can serve as a stability
+diagnostic.
+
+
+# Introduction
+
+## Installation
+
+```bash
+bun add @dnax/ml
+```
+
+`@dnax/ml` runs on Bun, Node.js and in the browser. It has a single
+dependency (`@kanaries/ml`, pinned to an exact version), which is itself
+dependency-free — the runtime footprint is minimal.
+
+## Quick start
+
+Train a linear regression directly on JSON rows — no matrix conversion:
+
+```ts
+import { LinearRegression } from "@dnax/ml";
+
+const students = [
+  { name: "koffi", note: 1, admis: true },
+  { name: "Jules", note: 2, admis: false },
+  { name: "Aya", note: 3, admis: true },
+  { name: "Sam", note: 4, admis: false },
+  { name: "Léo", note: 5, admis: true },
+];
+
+const reg = new LinearRegression();
+reg.fit(students, { features: ["note", "admis"], target: "note" });
+
+const preds = reg.predict([{ name: "x", note: 6, admis: true }]);
+console.log(preds[0]); // 6
+```
+
+What just happened:
+
+1. `fit(students, spec)` — the **spec** says which fields are `features` (X)
+   and which is the `target` (Y). The rows are transformed automatically
+   (`admis: boolean` → 1/0).
+2. `predict(rows)` — same fields, no target needed, returns predictions.
+3. The model remembers the transformation: `coef`, `columnNames` and
+   `export`/`load` all stay consistent.
+
+Both import styles work everywhere — scoped `new linear.LinearRegression()`
+and flat `new LinearRegression()` are identical (see
+[Core concepts](http://localhost:3000/01-getting-started/03-core-concepts)).
+
+## Evaluate the model
+
+```ts
+// R² on rows that include the target (ground truth)
+const r2 = reg.score(students); // ~1.0 on this perfect fit
+
+// Train/test split + cross-validation for a robust choice
+import { trainTestSplit, crossValScore } from "@dnax/ml";
+
+const { train, test } = trainTestSplit(students, {
+  testSize: 0.3,
+  randomState: 42,
+});
+reg.fit(train, { features: ["note", "admis"], target: "note" });
+console.log(reg.score(test)); // quality on unseen rows
+```
+
+## What next?
+
+- [Architecture](http://localhost:3000/01-getting-started/02-architecture) — how the facade is structured
+- [Core concepts](http://localhost:3000/01-getting-started/03-core-concepts) — the JSON-first spec, value encoding, missing values, scoped imports
+- [Linear models](http://localhost:3000/04-linear) — regression and classification
+- [Neighbors](http://localhost:3000/05-neighbors) — instance-based kNN classification and regression
+- [Evaluation](http://localhost:3000/11-evaluation) — score, metrics, splits, cross-validation
+- [Feature selection](http://localhost:3000/12-feature-selection) — rank and select the informative columns
+- [Monitoring](http://localhost:3000/09-monitoring) — time-series drift detection
+- [Spatial scan](http://localhost:3000/10-scan) — geographic cluster detection
+- [Examples](http://localhost:3000/15-examples) — ready-made 5-row datasets and expected outputs for every model
+- [API reference](http://localhost:3000/14-api-reference) — every model and method
+
+
+# Linear Regression
+
+Ordinary least squares: fits a straight line by minimizing the squared error.
+The baseline every other model is compared to.
+
+**When to use it** — the relationship looks like a straight line and you need a
+**continuous number** out: salary, price, sales volume, delivery time.
+`coef` / `intercept` explain the impact of each feature.
+
+```ts
+import { linear } from "@dnax/ml";
+
+const reg = new linear.LinearRegression();
+reg.fit(students, { features: ["note", "admis"], target: "note" });
+const preds = reg.predict([{ name: "x", note: 6, admis: true }]);
+console.log(preds[0]); // 6
+```
+
+Methods: `predict`, `fill_predict`, `score` (R²), `mse`, `mae`, `predictAsync`,
+`coef`, `intercept`, `getParams()` / `setParams()`, `export` / `load`.
+
+
+# Logistic Regression
+
+Binary (and multiclass) classification. A boolean `target` is encoded
+automatically: `false` → 0, `true` → 1. Adds `predict_proba` and
+`fill_predict_proba` for probabilities, plus `rocAucScore`.
+
+**When to use it** — the answer is a **yes/no** (or a class) and you want the
+**probability**, not just the label: churn, fraud, will-buy, disease risk.
+
+```ts
+import { linear } from "@dnax/ml";
+
+const clients = [
+  { age: 20, solde: 100, achete: false },
+  { age: 35, solde: 5000, achete: true },
+  // ...
+];
+
+const clf = new linear.LogisticRegression();
+clf.fit(clients, { features: ["age", "solde"], target: "achete" });
+
+const labels = clf.predict([{ age: 38, solde: 7000 }]); // [1]
+const probs = clf.predict_proba([{ age: 38, solde: 7000 }]); // [[~0, ~1]]
+```
+
+Methods: `predict`, `predict_proba`, `fill_predict`, `fill_predict_proba`,
+`score` (accuracy), `classificationReport`, `rocAucScore`, `coef`,
+`intercept`, `getParams()` / `setParams()`, `export` / `load`.
+
+
+# Ridge Regression
+
+L2 regularization (`alpha`): stable coefficients when features are correlated
+or when ordinary least squares overfits.
+
+**When to use it** — your features are **correlated** (multicollinearity): the
+L2 penalty shrinks the coefficients instead of letting them explode.
+
+```ts
+import { linear } from "@dnax/ml";
+
+const reg = new linear.RidgeRegression({ alpha: 1 }); // L2 penalty (default: 1)
+reg.fit(data, { features: ["age", "annees_exp"], target: "salaire" });
+```
+
+The `alpha` / `fitIntercept` config is preserved through `export` / `load`.
+
+Methods: `predict`, `fill_predict`, `score` (R²), `mse`, `mae`, `predictAsync`,
+`coef`, `intercept`, `getParams()` / `setParams()`, `export` / `load`.
+
+
+# Lasso Regression
+
+L1 regularization (`alpha`): some coefficients shrink to exactly `0`,
+discarding uninformative features — a built-in feature selector.
+
+**When to use it** — you have many features and suspect most are noise: L1
+**zeroes the useless ones**, giving you a smaller, interpretable model.
+
+```ts
+import { linear } from "@dnax/ml";
+
+const reg = new linear.LassoRegression({ alpha: 1 }); // L1 penalty (default: 1)
+reg.fit(data, { features: ["age", "annees_exp", "inutile"], target: "salaire" });
+reg.coef; // → [..., 0]  (uninformative features are set to 0)
+```
+
+The `alpha` / `fitIntercept` / `maxIter` / `tol` config is preserved through
+`export` / `load`.
+
+Methods: `predict`, `fill_predict`, `score` (R²), `mse`, `mae`, `predictAsync`,
+`coef`, `intercept`, `getParams()` / `setParams()`, `export` / `load`.
+
+
+# Elastic Net
+
+Lasso + Ridge penalties: stable on correlated features **and** feature
+selection. `l1Ratio` balances the two (`0` = pure Ridge, `1` = pure Lasso,
+default `0.5`).
+
+**When to use it** — both worlds: **correlated features AND useless columns**.
+The L1 + L2 compromise is the robust default when you don't know which of the
+two problems you have.
+
+```ts
+import { linear } from "@dnax/ml";
+
+const reg = new linear.ElasticNet({ alpha: 1, l1Ratio: 0.5 });
+reg.fit(data, { features: ["age", "annees_exp", "inutile"], target: "salaire" });
+reg.coef; // stable on correlated features, 0 on uninformative ones
+```
+
+The `alpha` / `l1Ratio` / `fitIntercept` / `maxIter` / `tol` config is
+preserved through `export` / `load`.
+
+Methods: `predict`, `fill_predict`, `score` (R²), `mse`, `mae`, `predictAsync`,
+`coef`, `intercept`, `getParams()` / `setParams()`, `export` / `load`.
+
+
+# Ridge Classifier
+
+L2-regularized linear classifier (one-vs-rest ridge models). Fast and
+interpretable on numeric tabular data; binary and multiclass. &#x2A;*No
+`predict_proba`** — labels only.
+
+**When to use it** — a fast **label-only** classifier: quick baseline, or a
+yes/no decision on large data where a probability is not needed.
+
+```ts
+import { linear } from "@dnax/ml";
+
+const clf = new linear.RidgeClassifier({ alpha: 1 });
+clf.fit(data, { features: ["note", "heures"], target: "admis" });
+clf.predict(data);      // labels
+clf.fill_predict(data); // rows + predicted label
+clf.coef;               // matrix (one row of weights per class)
+```
+
+Methods: `predict`, `fill_predict`, `score` (accuracy), `classificationReport`,
+`classes`, `coef`, `intercept`, `getParams()` / `setParams()`,
+`export` / `load`.
+
+
+# RANSAC Regressor
+
+Fits many random subsets, keeps the consensus set of inliers, and predicts
+from the best fit. Exposes `inlierMask` to identify outliers.
+
+**When to use it** — your data contains **bad measurements** (sensor glitch,
+manual entry error, one-off event): it fits the healthy line and ignores the
+noise. `inlierMask` flags the bad rows for investigation.
+
+```ts
+import { linear } from "@dnax/ml";
+
+const reg = new linear.RANSACRegressor({ randomState: 42 });
+reg.fit(data, { features: ["x"], target: "y" }); // y contains outliers
+reg.coef;         // fitted on the inliers only
+reg.inlierMask;   // [true, ..., false] — which samples are outliers
+```
+
+`export` / `load` use the official kml serializer (inlier mask, trial count,
+config preserved).
+
+Methods: `predict`, `fill_predict`, `score` (R²), `mse`, `mae`, `predictAsync`,
+`inlierMask`, `nTrials`, `coef`, `intercept`, `export` / `load`.
+
+
+# Poisson Regressor
+
+Generalized linear model for **counts** (non-negative integers). Uses a log
+link, so predictions are always `>= 0`.
+
+**When to use it** — the target is a **count**: units sold, incidents,
+patients per day, calls per hour. `LinearRegression` could predict negative
+numbers here; Poisson cannot.
+
+```ts
+import { linear } from "@dnax/ml";
+
+const reg = new linear.PoissonRegressor({ alpha: 0.1 });
+reg.fit(data, { features: ["pub", "prix"], target: "ventes" });
+reg.predict(data); // always >= 0
+```
+
+The `alpha` / `fitIntercept` / `maxIter` / `tol` config is preserved through
+`export` / `load`.
+
+Methods: `predict`, `fill_predict`, `score` (R²), `mse`, `mae`, `predictAsync`,
+`nIter`, `coef`, `intercept`, `getParams()` / `setParams()`, `export` / `load`.
+
+
+# Polynomial Regression
+
+Expands each feature to powers `1..degree`, then fits ordinary least squares
+on the expanded matrix. Use when the target follows a smooth curve.
+
+**When to use it** — the data **bends**: quadratic cost curves, price
+elasticities, diminishing returns. `degree` 2+ captures curvature a straight
+line misses.
+
+```ts
+import { linear } from "@dnax/ml";
+
+const reg = new linear.PolynomialRegression({ degree: 2 }); // default: 2
+reg.fit(data, { features: ["quantite"], target: "cout" });
+reg.predict(data);
+```
+
+The `degree` config is preserved through `export` / `load`. Beware of very
+high degrees: they overfit.
+
+Methods: `predict`, `fill_predict`, `score` (R²), `mse`, `mae`, `predictAsync`,
+`degree`, `coef`, `intercept`, `getParams()` / `setParams()`, `export` / `load`.
+
+
+# Overview
+
+> **Scoped vs flat import** — scoped: `new linear.LinearRegression()` ·
+> flat: `import { LinearRegression } from "@dnax/ml"`. Both are identical.
+
+All linear models share the same JSON-first API: `fit`, `predict`,
+`fill_predict`, `coef`, `intercept`, `getParams()` / `setParams()`,
+`predictAsync`, `score`, `mse`, `mae` and `export` / `load`.
+
+| Model                                                                             | Purpose                               |
+| --------------------------------------------------------------------------------- | ------------------------------------- |
+| [Linear Regression](http://localhost:3000/04-linear/01-linear-regression)         | ordinary least squares — the baseline |
+| [Logistic Regression](http://localhost:3000/04-linear/02-logistic-regression)     | classification with probabilities     |
+| [Ridge Regression](http://localhost:3000/04-linear/03-ridge-regression)           | L2 — stable with correlated features  |
+| [Lasso Regression](http://localhost:3000/04-linear/04-lasso-regression)           | L1 — feature selection                |
+| [Elastic Net](http://localhost:3000/04-linear/05-elastic-net)                     | L1 + L2 combined                      |
+| [Ridge Classifier](http://localhost:3000/04-linear/06-ridge-classifier)           | fast label-only classifier            |
+| [RANSAC Regressor](http://localhost:3000/04-linear/07-ransac-regressor)           | robust to outliers                    |
+| [Poisson Regressor](http://localhost:3000/04-linear/08-poisson-regressor)         | count targets, predictions ≥ 0        |
+| [Polynomial Regression](http://localhost:3000/04-linear/09-polynomial-regression) | nonlinear curves                      |
+
+`predictAsync(data)` is available on every regressor: it offloads the
+prediction to a worker so the event loop stays responsive on large sets.
+
+```ts
+const preds = await reg.predictAsync(bigData);
+```
+
+
+# KNeighborsClassifier
+
+Each point is classified by **majority vote** of its `kNeighbors` nearest
+labeled examples (with `weightType: "distance"`, nearer neighbors get more
+weight).
+
+**When to use it** — **no training phase**: predictions come from the nearest
+labeled examples. Use as a non-parametric baseline, or when the decision
+boundary is very local (a fraud looks like the frauds near it). Distance-based
+→ `scale: true` is required.
+
+```ts
+import { neighbors } from "@dnax/ml";
+
+const clf = new neighbors.KNeighborsClassifier({ kNeighbors: 5 });
+clf.fit(clients, {
+  features: ["age", "solde"],
+  target: "achete",
+  options: { scale: true },
+});
+
+clf.predict(newClients);            // labels
+clf.fill_predict(newClients);       // rows + predicted label
+clf.classes;                        // [0, 1] — sorted class labels (classes_)
+clf.score(test);                    // accuracy
+clf.classificationReport(test);     // precision / recall / F1 / confusion matrix
+```
+
+Note: kml's KNeighborsClassifier has &#x2A;*no `predict_proba`** — labels only.
+`classes` exposes the sorted class labels (sklearn-style `classes_`).
+
+| Param          | Default | Role                                                      |
+| -------------- | ------- | --------------------------------------------------------- |
+| `kNeighbors`   | `5`     | number of nearest neighbors in the vote                   |
+| `weightType`   | —       | `'uniform'` (majority) or `'distance'` (inverse-distance) |
+| `distanceType` | —       | distance metric (`'euclidean'`, `'manhattan'`, ...)       |
+| `pNorm`        | `2`     | Minkowski p-norm (only for `'minkowski'`)                 |
+
+sklearn-style aliases are accepted: `nNeighbors`, `weights` and `metric`
+map to `kNeighbors`, `weightType` and `distanceType`.
+
+Methods: `predict`, `fill_predict`, `score` (accuracy), `classificationReport`,
+`classes`, `getParams()` / `setParams()`, `export` / `load`.
+
+
+# KNeighborsRegressor
+
+Each prediction is the **average** (or inverse-distance weighted average) of
+the target values of the `nNeighbors` nearest labeled examples.
+
+**When to use it** — same principle for a **continuous target**: the prediction
+is the average of the k nearest known values. Ideal for very local patterns
+(price per m² in a neighborhood, delivery time per route). Distance-based →
+`scale: true` is required.
+
+```ts
+import { neighbors } from "@dnax/ml";
+
+const reg = new neighbors.KNeighborsRegressor({ nNeighbors: 5 });
+reg.fit(employees, {
+  features: ["age", "annees_exp"],
+  target: "salaire",
+  options: { scale: true },
+});
+
+reg.predict(newEmployees);  // predicted values
+reg.score(test);            // R²
+reg.mae(test);              // mean absolute error
+```
+
+| Param        | Default | Role                                                |
+| ------------ | ------- | --------------------------------------------------- |
+| `nNeighbors` | `5`     | number of nearest neighbors averaged                |
+| `weights`    | —       | `'uniform'` (plain average) or `'distance'`         |
+| `metric`     | —       | distance metric (`'euclidean'`, `'manhattan'`, ...) |
+| `p`          | `2`     | Minkowski p-norm (only for `'minkowski'`)           |
+
+kml-style aliases are accepted: `kNeighbors`, `weightType` and `distanceType`
+map to `nNeighbors`, `weights` and `metric`.
+
+Methods: `predict`, `fill_predict`, `score` (R²), `mse`, `mae`,
+`getParams()` / `setParams()`, `export` / `load`.
+
+
+# Overview
+
+> **Scoped vs flat import** — scoped: `new neighbors.KNeighborsClassifier()` ·
+> flat: `import { KNeighborsClassifier } from "@dnax/ml"`. Both are identical.
+
+Nearest-neighbor models are **instance-based**: no model is learned, the
+training rows are memorized and each prediction comes from the **nearest
+labeled examples**. They make an excellent non-parametric baseline — if kNN
+beats your parametric models, the relationship is very local.
+
+**⚠️ Distance-based**: normalize the features (`options: { scale: true }`) or
+the columns with the largest magnitude will dominate the distances.
+
+| Model                                                                               | Purpose                                         |
+| ----------------------------------------------------------------------------------- | ----------------------------------------------- |
+| [KNeighborsClassifier](http://localhost:3000/05-neighbors/01-kneighbors-classifier) | majority vote of the k nearest labeled examples |
+| [KNeighborsRegressor](http://localhost:3000/05-neighbors/02-kneighbors-regressor)   | average of the k nearest target values          |
+
+## Tips
+
+- **kNN is not an interpolator**: a training point predicts the average/vote
+  of itself + its neighbors, so the training error is never \~0. Use a
+  hold-out set (see [Evaluation](http://localhost:3000/11-evaluation)) to judge quality.
+- **Choose `k` by validation**: small `k` = flexible but noisy, large `k` =
+  smooth but blurry. Compare `score` across a few values with
+  `crossValScore`.
+- **`'distance'` weights** help when the nearest neighbor is much closer than
+  the others.
+- **`getParams()` / `setParams()`** work on both models (sklearn-style).
+  `setParams` rebuilds the model **unfitted** — call `fit` again before
+  `predict`; unknown keys throw.
+- Both models persist with `export` / `load` (training rows are saved).
+
+
+# KMeans
+
+Partitions rows into `n_clusters` groups around centroids. `fit` assigns
+labels to the training rows, `predict` assigns new rows to the nearest
+centroid.
+
+**When to use it** — you know the **number of groups** you want
+(`n_clusters`): customer segments, market zones, inventory categories. Fast
+and interpretable via `centroids`. `scale: true` is required (distances).
+
+```ts
+import { clusters } from "@dnax/ml";
+
+const km = new clusters.KMeans({ n_clusters: 3, random_state: 42 });
+km.fit(data, { features: ["age", "solde"] });
+km.labels_;   // [0, 0, 1, 1, 2, ...] — cluster label per training row
+km.predict(data); // assign new rows to the nearest centroid
+km.centroids; // cluster centers
+km.inertia;   // compactness (lower = tighter)
+```
+
+| Param          | Default | Role                                 |
+| -------------- | ------- | ------------------------------------ |
+| `n_clusters`   | `2`     | number of clusters                   |
+| `tol`          | `0.05`  | convergence tolerance on inertia     |
+| `max_iter`     | `30`    | max Lloyd iterations per run         |
+| `initCenters`  | —       | user-provided initial centers        |
+| `random_state` | —       | seed for reproducible k-means++ init |
+
+Methods: `fit`, `predict` (nearest centroid), `fit_predict`, `export` / `load`
+· getters `labels_`, `centroids`, `inertia`.
+
+
+# DBSCAN
+
+Groups **dense regions** and marks isolated points as **noise** (label `-1`).
+You don't choose the number of clusters — you choose density.
+
+**When to use it** — groups have **arbitrary shape** and density is what
+defines them, plus you want the leftovers &#x2A;*flagged as noise (−1)**: store
+clusters, anomaly zones. No `k` to choose — you pick `eps` instead.
+
+```ts
+import { clusters } from "@dnax/ml";
+
+const db = new clusters.DBSCAN({ eps: 0.5, minSamples: 2 });
+db.fit(data, { features: ["x", "y"] });
+db.labels_; // [0, 0, 1, 1, -1, ...] — -1 means noise
+```
+
+| Param          | Default | Role                                   |
+| -------------- | ------- | -------------------------------------- |
+| `eps`          | `0.5`   | neighborhood radius                    |
+| `minSamples`   | `5`     | min neighborhood size for a core point |
+| `distanceType` | —       | `'euclidean'`                          |
+
+> **Note**: DBSCAN does not support `predict` on new points (like
+> scikit-learn) — use `fit_predict` on the full dataset instead.
+
+Methods: `fit`, `fit_predict`, `export` / `load` · getter `labels_`
+(`-1` = noise). No `predict` on new points.
+
+
+# HDBSCAN
+
+Extends DBSCAN with a **density hierarchy**: clusters of arbitrary shape and
+**varying density** are selected by stability, and isolated points get a
+near-zero membership probability. No `predict` on new points — labels are
+computed on the training rows.
+
+**When to use it** — densities **vary** and you don't want to pick `k` or
+`eps`: it finds the hierarchy by itself, and `probabilities` tells you how
+confident each point's membership is (≈ 0 = isolated).
+
+```ts
+import { clusters } from "@dnax/ml";
+
+const hdb = new clusters.HDBSCAN({ min_cluster_size: 5 });
+hdb.fit(ventesGeo, { features: ["x", "y"] });
+hdb.labels_;       // [0, 0, 1, 1, ...] — cluster label per row
+hdb.probabilities; // [1, 0.9, 1, ...] — membership strength (0 = noise)
+```
+
+| Param                       | Default       | Role                                              |
+| --------------------------- | ------------- | ------------------------------------------------- |
+| `min_cluster_size`          | `5`           | smallest group considered a cluster (≥ 2)         |
+| `min_samples`               | `null`        | neighborhood size for core distances (= min size) |
+| `cluster_selection_epsilon` | —             | clusters split below this distance are merged     |
+| `metric`                    | `'euclidean'` | distance metric name                              |
+| `allow_single_cluster`      | `false`       | allow the root hierarchy as one cluster           |
+
+Methods: `fit`, `fit_predict`, `export` / `load` · getters `labels_`,
+`probabilities` (0 = noise). No `predict` on new points.
+
+
+# Overview
+
+> **Scoped vs flat import** — scoped: `new clusters.KMeans()` ·
+> flat: `import { KMeans } from "@dnax/ml"`. Both are identical.
+
+Clustering groups unlabeled rows into meaningful groups — there is **no
+target field**, the spec only selects `features`.
+
+| Model                                                     | Purpose                                           |
+| --------------------------------------------------------- | ------------------------------------------------- |
+| [KMeans](http://localhost:3000/06-clustering/01-kmeans)   | centroid clustering — you pick `n_clusters`       |
+| [DBSCAN](http://localhost:3000/06-clustering/02-dbscan)   | density clustering — you pick `eps`, noise = `-1` |
+| [HDBSCAN](http://localhost:3000/06-clustering/03-hdbscan) | density hierarchy — it picks the shapes           |
+
+## Tips
+
+- Normalize features (`options: { scale: true }`) before clustering so
+  distances behave consistently.
+- `options.noise` can be used as a **stability diagnostic**: if clusters
+  change a lot under slight jittering, the signal is weak.
+- **KMeans** groups by *count* (you pick k) · **DBSCAN** by *density*
+  (you pick eps) · **HDBSCAN** by *density hierarchy* (it picks the shapes) —
+  start with HDBSCAN when the clusters have uneven densities or shapes.
+
+
+# DecisionTreeClassifier
+
+Splits the feature space into **if/else rules** — the most interpretable
+classifier in the SDK. **When to use it** — you need rules you can explain to
+a human (regulatory audits, medical triage, loan decisions). Best with a small
+set of features.
+
+```ts
+import { tree } from "@dnax/ml";
+
+const clf = new tree.DecisionTreeClassifier({ max_depth: 3 });
+clf.fit(data, { features: ["age", "solde"], target: "achete" });
+clf.predict(data);           // labels
+clf.fill_predict(data);      // rows + predicted label
+clf.featureImportances;      // how much each feature drives the splits
+```
+
+Note: kml's `DecisionTreeClassifier` has **no** `predict_proba` — labels only.
+
+Methods: `predict`, `fill_predict`, `score` (accuracy), `classificationReport`,
+`featureImportances`, `export` / `load`.
+
+
+# DecisionTreeRegressor
+
+**When to use it** — the relationship is **stepwise**: salary bands, tax
+brackets, quantity discounts. It predicts the mean of the bucket, not a smooth
+line — perfect when real life jumps in levels.
+
+```ts
+import { tree } from "@dnax/ml";
+
+const reg = new tree.DecisionTreeRegressor({ max_depth: 3 });
+reg.fit(data, { features: ["age", "annees_exp"], target: "salaire" });
+reg.predict(data);
+```
+
+Methods: `predict`, `fill_predict`, `score` (R²), `mse`, `mae`,
+`featureImportances`, `export` / `load`.
+
+
+# ExtraTreeClassifier
+
+Extremely randomized trees: split thresholds are chosen **randomly** instead
+of optimally. Faster and often more robust against overfitting. Exposes
+`predict_proba` / `fill_predict_proba`.
+
+**When to use it** — same family but **randomized** and it **gives
+probabilities** (`predict_proba`, `rocAucScore`): use when you need a
+probability output from a cheap tree model.
+
+```ts
+import { tree } from "@dnax/ml";
+
+const clf = new tree.ExtraTreeClassifier({ max_depth: 5 });
+clf.fit(data, { features: ["age", "solde"], target: "achete" });
+clf.predict_proba(data);          // per-class probabilities
+clf.fill_predict_proba(data);     // rows + probability in the target
+```
+
+Methods: `predict`, `predict_proba`, `fill_predict`, `fill_predict_proba`,
+`score` (accuracy), `classificationReport`, `rocAucScore`,
+`featureImportances`, `export` / `load`.
+
+
+# ExtraTreeRegressor
+
+Extremely randomized tree for a **continuous target**: split thresholds are
+chosen randomly instead of optimally. Faster and often more robust against
+overfitting than a plain tree.
+
+**When to use it** — a solid cheap base model for forecasts and sensor values
+(temperature, demand). `randomState` keeps it reproducible.
+
+```ts
+import { tree } from "@dnax/ml";
+
+const reg = new tree.ExtraTreeRegressor({ max_depth: 5, randomState: 42 });
+reg.fit(data, { features: ["note", "heures"], target: "resultat" });
+reg.predict(data);
+```
+
+Methods: `predict`, `fill_predict`, `score` (R²), `mse`, `mae`,
+`featureImportances`, `export` / `load`.
+
+
+# Overview
+
+> **Scoped vs flat import** — scoped: `new tree.DecisionTreeClassifier()` ·
+> flat: `import { DecisionTreeClassifier } from "@dnax/ml"`. Both are identical.
+
+Trees split the feature space into **if/else rules** — the most interpretable
+models in the SDK. They share a common JSON-first API and expose
+`featureImportances` (how much each feature drives the splits) instead of
+`coef` / `intercept`.
+
+| Model                                                                               | Purpose                                |
+| ----------------------------------------------------------------------------------- | -------------------------------------- |
+| [DecisionTreeClassifier](http://localhost:3000/07-tree/01-decision-tree-classifier) | readable if/then rules — labels only   |
+| [DecisionTreeRegressor](http://localhost:3000/07-tree/02-decision-tree-regressor)   | stepwise predictions (leaf mean)       |
+| [ExtraTreeClassifier](http://localhost:3000/07-tree/03-extra-tree-classifier)       | randomized tree with probabilities     |
+| [ExtraTreeRegressor](http://localhost:3000/07-tree/04-extra-tree-regressor)         | randomized tree for continuous targets |
+
+## Common parameters
+
+| Param               | Default     | Role                                           |
+| ------------------- | ----------- | ---------------------------------------------- |
+| `max_depth`         | `Infinity`  | tree depth (limit to avoid overfitting)        |
+| `min_samples_split` | `2`         | min samples required to keep splitting         |
+| `criterion`         | `'entropy'` | impurity criterion (`'gini'` available)        |
+| `max_features`      | —           | features per split (`number`                   |
+| `randomState`       | —           | seed for reproducible random feature selection |
+
+All tree models also expose the evaluation methods (`score` for accuracy/R²,
+`mse`/`mae` for regressors, `classificationReport` for classifiers) and full
+persistence (`export` / `load`).
+
+
+# IsolationForest
+
+Unsupervised: builds random partition trees and flags points that are
+isolated quickly (short path length) as anomalies. **No target** — only
+`features`. Returns binary labels and a continuous `anomaly_score`.
+
+**When to use it** — **anomaly detection without labels**: flag the
+transactions/rows that stand out — **fraud**, **IoT sensor faults**, or
+**data cleaning** before supervised training. `predict` → 1 = anomaly;
+`anomaly_score` ranks them.
+
+```ts
+import { ensemble } from "@dnax/ml";
+
+const model = new ensemble.IsolationForest({ random_state: 42 });
+model.fit(data, { features: ["montant", "heure"] }); // build the forest
+const labels = model.predict(data); // → [0, 0, 0, 1, 0, 1] — 1 = anomaly
+
+const score = model.anomaly_score({ montant: 9000, heure: 3 });
+// → 0.62 — continuous anomaly score (custom thresholds)
+```
+
+Methods: `fit`, `predict` (1 = anomaly), `anomaly_score(row)`, `fill_predict`,
+`export` / `load` · getters `columnNames`, `droppedRows`.
+
+
+# RandomForestClassifier
+
+Many decision trees combined by **majority vote**. More robust and accurate
+than a single tree. Note: kml's `RandomForestClassifier` does **not** expose
+`predict_proba`.
+
+**When to use it** — the **robust default** for tabular classification:
+handles nonlinearity and feature interactions with little tuning. Labels only.
+
+```ts
+import { ensemble } from "@dnax/ml";
+
+const clf = new ensemble.RandomForestClassifier({
+  nEstimators: 100,
+  max_depth: 10,
+  randomState: 42,
+});
+clf.fit(data, { features: ["age", "solde"], target: "achete" });
+```
+
+Methods: `predict`, `fill_predict`, `score` (accuracy), `classificationReport`,
+`featureImportances`, `export` / `load`.
+
+
+# RandomForestRegressor
+
+Many decision trees combined by **averaging**. More robust and accurate than
+a single tree.
+
+**When to use it** — the **robust default** for regression: solid results
+without much tuning, harder to overfit than a single tree. Good when features
+interact.
+
+```ts
+import { ensemble } from "@dnax/ml";
+
+const reg = new ensemble.RandomForestRegressor({ nEstimators: 100, randomState: 42 });
+reg.fit(data, { features: ["age", "annees_exp"], target: "salaire" });
+```
+
+Methods: `predict`, `fill_predict`, `score` (R²), `mse`, `mae`,
+`featureImportances`, `export` / `load`.
+
+
+# AdaBoostClassifier
+
+Fits **stumps** (1-level trees) sequentially, each correcting the previous
+mistakes (weighted resampling). Exposes calibrated `predict_proba`.
+
+**When to use it** — sequential boosting of weak learners. Try it when
+`RandomForestClassifier` underperforms; it returns **probabilities** and works
+well on moderate-size tabular data.
+
+```ts
+import { ensemble } from "@dnax/ml";
+
+const clf = new ensemble.AdaBoostClassifier({
+  nEstimators: 100,
+  learningRate: 1.0,
+  randomState: 42,
+});
+clf.fit(data, { features: ["age", "solde"], target: "achete" });
+clf.predict_proba(data); // per-class probabilities
+```
+
+> **Pitfall**: AdaBoost stumps cannot converge on a perfectly symmetric XOR
+> pattern — probabilities stay near `[0.5, 0.5]`. Use linearly segmentable
+> data.
+
+Methods: `predict`, `predict_proba`, `fill_predict`, `fill_predict_proba`,
+`score` (accuracy), `classificationReport`, `rocAucScore`,
+`featureImportances`, `export` / `load`.
+
+
+# AdaBoostRegressor
+
+Sequential boosting for a **continuous target**: each round focuses on the
+residuals of the previous ensemble.
+
+**When to use it** — boosting for regression: good for demand, price and load
+forecasts when the features are clean.
+
+```ts
+import { ensemble } from "@dnax/ml";
+
+const reg = new ensemble.AdaBoostRegressor({
+  nEstimators: 100,
+  learningRate: 1.0,
+  randomState: 42,
+});
+reg.fit(data, { features: ["x"], target: "prix" });
+```
+
+Methods: `predict`, `fill_predict`, `score` (R²), `mse`, `mae`,
+`featureImportances`, `export` / `load`.
+
+
+# GradientBoostingClassifier
+
+Sequential trees fitted on the **residuals** of the previous ensemble, with a
+small learning rate. Calibrated probabilities.
+
+**When to use it** — the **strongest off-the-shelf tabular classifier** with
+calibrated probabilities: use when accuracy matters most and you can tune
+`learningRate` / `maxDepth`.
+
+```ts
+import { ensemble } from "@dnax/ml";
+
+const clf = new ensemble.GradientBoostingClassifier({
+  nEstimators: 100,
+  learningRate: 0.1, // key lever: low + many trees = robust
+  maxDepth: 3,       // keep 2-4
+  randomState: 42,
+});
+clf.fit(data, { features: ["age", "solde"], target: "achete" });
+clf.predict_proba(data); // calibrated per-class probabilities
+```
+
+Methods: `predict`, `predict_proba`, `fill_predict`, `fill_predict_proba`,
+`score` (accuracy), `classificationReport`, `rocAucScore`,
+`featureImportances`, `export` / `load`.
+
+
+# GradientBoostingRegressor
+
+Sequential trees fitted on the **residuals** of the previous ensemble, with a
+small learning rate.
+
+**When to use it** — often the **best default regressor** on tabular data:
+nonlinear trends + feature interactions with well-calibrated errors.
+
+```ts
+import { ensemble } from "@dnax/ml";
+
+const reg = new ensemble.GradientBoostingRegressor({
+  nEstimators: 100,
+  learningRate: 0.1,
+  maxDepth: 3,
+});
+reg.fit(data, { features: ["x"], target: "prix" });
+```
+
+Methods: `predict`, `fill_predict`, `score` (R²), `mse`, `mae`,
+`featureImportances`, `export` / `load`.
+
+
+# XGBoostClassifier
+
+Regularized gradient boosting close to the `xgboost` library (L1/L2
+regularization and row/feature subsampling). Calibrated probabilities.
+
+**When to use it** — regularized boosting, **state of the art on large tabular
+data** (hundreds+ rows). On tiny sets it underfits.
+
+```ts
+import { ensemble } from "@dnax/ml";
+
+const clf = new ensemble.XGBoostClassifier({ nEstimators: 100, maxDepth: 3 });
+clf.fit(data, { features: ["x1", "x2"], target: "classe" });
+clf.predict_proba(data);  // calibrated probabilities
+clf.rocAucScore(data);    // AUC on rows with the target
+```
+
+> **Pitfall**: XGBoost can underfit on poorly-separated data with the default
+> `baseScore = 0.5` (which must stay in `(0,1)` for binary logistic). Use
+> clearly separated classes, or lower `baseScore`.
+
+Methods: `predict`, `predict_proba`, `fill_predict`, `fill_predict_proba`,
+`score` (accuracy), `classificationReport`, `rocAucScore`,
+`featureImportances`, `export` / `load`.
+
+
+# XGBoostRegressor
+
+Regularized gradient boosting for a **continuous target**, close to the
+`xgboost` library (L1/L2 regularization and row/feature subsampling).
+
+**When to use it** — the go-to choice on **big datasets with many features**;
+overkill on tiny data.
+
+```ts
+import { ensemble } from "@dnax/ml";
+
+const reg = new ensemble.XGBoostRegressor({ nEstimators: 100, maxDepth: 3 });
+reg.fit(data, { features: ["x"], target: "prix" });
+```
+
+> **Pitfall**: like the classifier, it underfits on poorly-separated data with
+> the default `baseScore = 0.5` — tune `baseScore` / `learningRate` or use
+> clearly separated classes.
+
+Methods: `predict`, `fill_predict`, `score` (R²), `mse`, `mae`,
+`featureImportances`, `export` / `load`.
+
+
+# Overview
+
+> **Scoped vs flat import** — scoped: `new ensemble.RandomForestClassifier()` ·
+> flat: `import { RandomForestClassifier } from "@dnax/ml"`. Both are identical.
+
+Ensembles combine many weak models into one strong model. They expose
+`featureImportances` instead of `coef` / `intercept`, plus the evaluation
+methods (`score`, `classificationReport`, `rocAucScore` where applicable).
+
+| Model                                                                                           | Purpose                                    |
+| ----------------------------------------------------------------------------------------------- | ------------------------------------------ |
+| [IsolationForest](http://localhost:3000/08-ensemble/01-isolation-forest)                        | unsupervised anomaly detection             |
+| [RandomForestClassifier](http://localhost:3000/08-ensemble/02-random-forest-classifier)         | bagged trees — robust default, labels only |
+| [RandomForestRegressor](http://localhost:3000/08-ensemble/03-random-forest-regressor)           | bagged trees for regression                |
+| [AdaBoostClassifier](http://localhost:3000/08-ensemble/04-adaboost-classifier)                  | sequential boosting of stumps              |
+| [AdaBoostRegressor](http://localhost:3000/08-ensemble/05-adaboost-regressor)                    | sequential boosting for regression         |
+| [GradientBoostingClassifier](http://localhost:3000/08-ensemble/06-gradient-boosting-classifier) | the strongest tabular default              |
+| [GradientBoostingRegressor](http://localhost:3000/08-ensemble/07-gradient-boosting-regressor)   | gradient boosting for regression           |
+| [XGBoostClassifier](http://localhost:3000/08-ensemble/08-xgboost-classifier)                    | regularized boosting — large data          |
+| [XGBoostRegressor](http://localhost:3000/08-ensemble/09-xgboost-regressor)                      | regularized boosting for regression        |
+
+## Common parameters (XGBoost)
+
+| Param (XGBoost)   | Default | Role                                    |
+| ----------------- | ------- | --------------------------------------- |
+| `nEstimators`     | `100`   | boosting rounds                         |
+| `learningRate`    | `0.3`   | step size (lower + more trees = robust) |
+| `maxDepth`        | `6`     | tree depth                              |
+| `lambda`          | `1`     | L2 regularization on weights            |
+| `gamma`           | `0`     | min loss reduction for a split          |
+| `minChildWeight`  | `1`     | min sum of weights in a child           |
+| `subsample`       | `1`     | fraction of rows per round              |
+| `colsampleByTree` | `1`     | fraction of features per tree           |
+| `baseScore`       | `0.5`   | initial prediction score                |
+| `randomState`     | —       | seed for reproducible fits              |
+
+
+# CUSUM
+
+Accumulates deviations from a reference mean: `S_n = max(0, S_{n-1} + (x_n − μ0 − k))`
+and alerts when `S_n > h`. Very sensitive to **small sustained shifts**.
+
+**When to use it** — detect the **onset of a sustained shift** in a series:
+early epidemic warnings, sales spikes, rising defect rates. Fit on a
+**known-normal baseline** first.
+
+| Param        | Default      | Role                                                           |
+| ------------ | ------------ | -------------------------------------------------------------- |
+| `target`     | estimated    | reference mean μ0 (deviations are measured against it)         |
+| `std`        | estimated    | series standard deviation σ                                    |
+| `k`          | `0.5·σ`      | allowable slack — sub-k shifts are ignored as background noise |
+| `h`          | `5·σ`        | alert threshold — lower = earlier but noisier alarms           |
+| `direction`  | `'increase'` | shift to detect: `'increase'`                                  |
+| `alertField` | `'alert'`    | field name filled by `fill_predict`                            |
+
+Methods: `fit`, `predict`, `scores`, `fill_predict`, `changePoint(data)`,
+`update(row)`, `reset()`, `export` / `load` · getters `target`, `std`,
+`slack`, `threshold`, `direction`.
+
+
+# EWMA
+
+Smooths the series with a decaying memory (`z_n = λ·x_n + (1−λ)·z_{n−1}`) and
+alerts when the smoothed value leaves `μ0 ± L·σ_z(n)`. Recovers quickly after
+isolated spikes.
+
+**When to use it** — same goal as CUSUM but it **smooths the noise** first:
+fewer false alarms on jittery series. `limits()` gives the control band to
+draw on a chart.
+
+| Param        | Default   | Role                                                             |
+| ------------ | --------- | ---------------------------------------------------------------- |
+| `lambda`     | `0.25`    | smoothing factor λ ∈ (0,1] — small = smooth, sensitive to trends |
+| `limit`      | `3`       | control-limit width L (in σ units)                               |
+| `target`     | estimated | reference mean μ0                                                |
+| `std`        | estimated | series standard deviation σ                                      |
+| `alertField` | `'alert'` | field name filled by `fill_predict`                              |
+
+Methods: `fit`, `predict`, `scores`, `fill_predict`, `limits(data)`,
+`update(row)`, `reset()`, `export` / `load` · getters `target`, `std`,
+`lambda`, `limit`.
+
+
+# ParallelMonitor
+
+Monitors several series simultaneously with one chart per field. An alert
+fires when **at least one** chart fires, and `alertFields` reports **which**
+fields triggered (interpretable alarms).
+
+**When to use it** — you watch **several series at once** (many products,
+meters, branches): it monitors each field and tells you **which ones**
+triggered.
+
+```ts
+import { monitoring } from "@dnax/ml";
+
+const pm = new monitoring.ParallelMonitor(); // one CUSUM per field (default)
+pm.fit(days, { fields: ["paracetamol", "ibuprofen"] });
+
+const alerts = pm.predict(days); // 1 when at least one chart fires
+const fields = pm.alertFields(days); // ["paracetamol"] per row — which fields
+const tracked = pm.fill_predict(days); // + alert: boolean + alertFields: string[]
+
+// EWMA charts, with a controlled family-wise false-alarm rate (Bonferroni):
+const pmE = new monitoring.ParallelMonitor({ model: "ewma", familyError: 0.05 });
+pmE.fit(days, { fields: ["paracetamol", "ibuprofen"] });
+```
+
+**Why the Bonferroni correction matters**: with N independent charts, the
+chance of at least one false alarm grows with N (5 charts at 5% each → \~23%
+family-wise). `familyError` divides the risk across charts (each chart gets
+the two-sided level `familyError / N`). When omitted, each chart keeps its
+own conservative defaults (`h = 5·σ`, `L = 3`).
+
+| Param              | Default         | Role                                                    |
+| ------------------ | --------------- | ------------------------------------------------------- |
+| `model`            | `'cusum'`       | chart type per field: `'cusum'` or `'ewma'`             |
+| `familyError`      | —               | family-wise false-alarm rate (Bonferroni across fields) |
+| `alertField`       | `'alert'`       | boolean field filled by `fill_predict`                  |
+| `alertFieldsField` | `'alertFields'` | field listing the triggering fields                     |
+
+Per-field overrides go in the spec: `{ fields, params: { paracetamol: { k, h } } }`
+(user values always win over the Bonferroni adjustment).
+
+Methods: `fit`, `predict`, `scores`, `fill_predict`, `alertFields(data)`,
+`update(row)`, `export` / `load` · getters `monitoredFields`, `targets`,
+`params`.
+
+
+# SeasonalMonitor
+
+Pharmacy-type sales follow a **weekly cycle** (weekend dips, Monday peaks). On
+a constant-mean chart this cycle inflates σ and **delays** the detection of a
+real shift. `SeasonalMonitor` fits a reference mean **per day of week**, then
+runs a CUSUM (or EWMA) on the deseasonalized residuals `x_n − μ0_{dayOfWeek(n)}`.
+
+**When to use it** — your series has a **weekly cycle*&#x2A; (pharmacy sales,
+traffic): it removes the weekday pattern so a real rise is not confused with a
+normal Monday peak. Needs **≥ 1 full week** of baseline.
+
+```ts
+import { monitoring } from "@dnax/ml";
+
+const sm = new monitoring.SeasonalMonitor();
+sm.fit(baseline, { field: "sales", dateField: "date" }); // at least one full week
+
+const alerts = sm.predict(sales); // 1 = the deseasonalized chart fires
+const profile = sm.dayProfile;    // reference mean per day of week (diagnostic)
+const tracked = sm.fill_predict(sales); // + alert: boolean
+```
+
+- **Needs ≥ 1 full week of baseline** (every day-of-week present) — throws otherwise.
+- `dateField` accepts a `Date`, an ISO date (`"2026-08-03"` parsed as local)
+  or a timestamp.
+- On a real weekly cycle (max/min profile ratio > \~1.3), it detects a
+  moderate epidemic **several days earlier** than a plain CUSUM.
+- `changePoint(data)` (CUSUM) and `limits(data)` (EWMA) are available on the
+  deseasonalized chart.
+
+Methods: `fit`, `predict`, `scores`, `fill_predict`, `update(row)`,
+`changePoint` / `limits` (per model), `export` / `load` · getter `dayProfile`.
+
+
+# Overview
+
+> **Scoped vs flat import** — scoped: `new monitoring.CUSUM()` ·
+> flat: `import { CUSUM } from "@dnax/ml"`. Both are identical.
+
+Statistical process control methods that detect the **onset of a sustained
+shift** in a series — e.g. the beginning of a sales peak. They complement the
+ML models: IsolationForest flags anomalies *per transaction*, CUSUM/EWMA flag
+anomalies *over time*.
+
+Both follow the SDK convention (`fit` → `predict` → `fill_predict`) on JSON
+rows, with a `MonitorSpec` selecting the numeric field to monitor:
+
+```ts
+import { monitoring } from "@dnax/ml";
+
+const days = [
+  { day: 1, sales: 118 },
+  { day: 2, sales: 121 },
+  // ...
+  { day: 18, sales: 200 }, // peak
+];
+
+// 1) Learn the reference (μ0, σ) on the normal period
+const cusum = new monitoring.CUSUM();
+cusum.fit(days.slice(0, 12), { field: "sales" });
+
+// 2) Monitor the whole series → alert as soon as the rise starts
+const alerts = cusum.predict(days); // number[]: 1 = alert, 0 = normal
+const scores = cusum.scores(days);  // cumulative S_n per point
+
+// 3) JSON rows with the alert field filled (input is not mutated)
+const tracked = cusum.fill_predict(days); // { day, sales, alert: true | false }
+```
+
+Both models persist with `export` / `load` (statistics + spec saved).
+
+| Model                                                                      | Purpose                                              |
+| -------------------------------------------------------------------------- | ---------------------------------------------------- |
+| [CUSUM](http://localhost:3000/09-monitoring/01-cusum)                      | cumulative sum — sensitive to small sustained shifts |
+| [EWMA](http://localhost:3000/09-monitoring/02-ewma)                        | exponential smoothing — fewer false alarms on noise  |
+| [ParallelMonitor](http://localhost:3000/09-monitoring/03-parallel-monitor) | several series at once, per-field alerts             |
+| [SeasonalMonitor](http://localhost:3000/09-monitoring/04-seasonal-monitor) | removes the weekly cycle before detecting            |
+
+## Online monitoring (real-time)
+
+CUSUM and EWMA are inherently sequential (`S_n` from `S_{n-1}`, `z_n` from
+`z_{n-1}`): `update(row)` consumes **one row** and advances the statistic
+point by point — no history is kept, no re-processing. Use it for live
+dashboards (one point per second):
+
+```ts
+const cusum = new monitoring.CUSUM();
+cusum.fit(baseline, { field: "sales" });
+
+cusum.update({ sales: 120 }); // → { alert: false, score: 0.5 }
+cusum.update({ sales: 135 }); // → { alert: true,  score: 12.3 }
+
+cusum.reset(); // restart monitoring from zero
+```
+
+- Starting from a fresh fit, calling `update` over a series yields the same
+  scores/alerts as `scores(data)` / `predict(data)` (verified by tests).
+- `ParallelMonitor.update(row)` returns `{ alert, alertFields, scores }` —
+  which fields triggered, per field score.
+- `SeasonalMonitor.update(row)` computes the day-of-week residual and
+  advances the internal chart.
+- `reset()` restarts the online state.
+
+## Advanced options (CUSUM / EWMA)
+
+- **`changePoint(data)`** (CUSUM) — estimates where the drift *began* (the
+  point right after the statistic last reset to 0), not just where it was
+  detected. Returns one index per row (`-1` when no drift is accumulating).
+- **`limits(data)`** (EWMA) — returns the time-varying control band
+  `{ ucl, lcl }` per point, useful for plotting or heatmaps.
+- **`robust: true`** — estimates μ0/σ with the **median** and the **MAD**
+  (1.4826·MAD) instead of the mean/std, so a few anomalous baseline days
+  barely move the thresholds.
+- **`direction: "both"`** (CUSUM) — runs the increase *and* decrease
+  statistics and alerts on the max.
+- **`missing: "fill"`** — carries the last known value forward (LOCF) when
+  the field is absent / non-numeric, keeping the output aligned with the
+  input rows (e.g. closed days). Default `'throw'`.
+
+```ts
+const cp = new monitoring.CUSUM({ robust: true, direction: "both" });
+cp.fit(baseline, { field: "sales", missing: "fill" });
+const onset = cp.changePoint(sales); // estimated drift onset per day
+
+const ew = new monitoring.EWMA({ lambda: 0.25, limit: 3 });
+ew.fit(baseline, { field: "sales" });
+const { ucl, lcl } = ew.limits(sales); // control band for plot/heatmap
+```
+
+> **Tip**: estimate `k`/`h` (or `target`/`std`) on a known-normal baseline
+> period, then monitor the full series — otherwise the peak itself inflates
+> the reference statistics.
+
+
+# SpatialScan
+
+**When to use it** — &#x2A;*where is the most likely geographic cluster?** —
+epidemic outbreak location, fraud hotspots. Needs a **population
+denominator** per zone. Retrospective (scans the current case counts against
+the learned baseline).
+
+```ts
+import { scan } from "@dnax/ml";
+
+const scanModel = new scan.SpatialScan({ replications: 999, randomState: 42 });
+scanModel.fit(zones, {
+  zone: "zone",
+  coordinates: ["lon", "lat"],
+  population: "population",
+  cases: "cases", // baseline (background) case rate
+});
+
+const cluster = scanModel.cluster(current); // { zones, cases, expected, llr, pValue } | null
+const tracked = scanModel.fill_predict(current); // rows + cluster: boolean
+```
+
+## Parameters
+
+| Param               | Default     | Role                                                 |
+| ------------------- | ----------- | ---------------------------------------------------- |
+| `replications`      | `199`       | Monte-Carlo draws for the p-value (SaTScan uses 999) |
+| `significance`      | `0.05`      | clusters with `p ≤ value` are reported               |
+| `maxWindowFraction` | `0.5`       | max zones per window (fraction of all zones)         |
+| `randomState`       | —           | seed for reproducible Monte-Carlo draws              |
+| `clusterField`      | `'cluster'` | boolean field filled by `fill_predict`               |
+
+## Notes
+
+- `fit` learns the zone map + populations + the global baseline case rate;
+  `cluster` / `predict` / `fill_predict` scan the **current** case counts.
+- Returns the **most likely cluster** when significant, `null` otherwise.
+  SaTScan-style secondary (non-overlapping) clusters are not reported yet.
+- On a grid where cold zones are equidistant from hot ones, the circular
+  window may include a few extra zones (genuine Kulldorff behavior).
+- Each call reruns the Monte-Carlo: call `cluster()` once and reuse the
+  result, or use `fill_predict()`.
+
+## Result shape — `ScanCluster`
+
+```ts
+interface ScanCluster {
+  zones: string[];      // zone ids inside the cluster
+  cases: number;        // observed cases in the cluster
+  expected: number;     // expected cases (population × global rate)
+  llr: number;          // log-likelihood ratio (larger = stronger)
+  pValue: number;       // empirical Monte-Carlo p-value
+}
+```
+
+Methods: `fit`, `cluster(data)` → `ScanCluster | null`, `predict`,
+`fill_predict`, `export` / `load` · getters `zonesList`, `expectedRate`.
+
+
+# GetisOrd
+
+Complementary statistic: Kulldorff answers &#x2A;"where is the single most likely
+cluster?"*; **Getis-Ord Gi*&#x2A;\* answers &#x2A;"which zones are unusually hot or
+cold?"* — **one result per zone**, no Monte-Carlo, O(n·k).
+
+**When to use it** — &#x2A;*which zones are significantly hot/cold?** — per-zone
+significance without a population. Needs more zones (10+) to reach
+significance.
+
+```ts
+import { scan } from "@dnax/ml";
+
+const gi = new scan.GetisOrd({ distance: 1, significance: 0.05 });
+gi.fit(zones, {
+  zone: "zone",
+  coordinates: ["lon", "lat"],
+  cases: "cases", // the variable of interest (counts or rates)
+});
+
+const results = gi.hotspots(current); // per zone
+// → { zone, zScore, pValue, hot, cold }[]
+const flagged = gi.fill_predict(current); // rows + hot: boolean
+```
+
+**How it works**: for each zone i, the Gi\* z-score compares the case sum over
+the neighborhood (zones within `distance`, i included) to what the global
+mean would predict. A **positive z with p ≤ significance = hotspot**, a
+**negative z = cold spot**.
+
+| Param          | Default | Role                                        |
+| -------------- | ------- | ------------------------------------------- |
+| `distance`     | mean NN | neighborhood radius (coordinates unit)      |
+| `significance` | `0.05`  | two-sided level for hot/cold classification |
+| `hotField`     | `'hot'` | boolean field filled by `fill_predict`      |
+
+**Notes**
+
+- `fit` learns geometry only (same zones as `SpatialScan`); the default
+  `distance` is the mean nearest-neighbor distance (deterministic).
+- `hotspots(data)` returns `{ zone, zScore, pValue, hot, cold }` per row;
+  `predict` → 1 = significant hotspot, `fill_predict` → + `hot: boolean`.
+- Works on raw counts **or** rates — pass population-adjusted rates in
+  `cases` to compare zones of different sizes fairly.
+- Uniform cases (zero variance) → z = 0, p = 1 → no hotspot.
+
+Methods: `fit`, `hotspots(data)` → `HotspotResult[]`, `predict`,
+`fill_predict`, `export` / `load` · getters `zonesList`, `distance`,
+`significance`.
+
+
+# Overview
+
+> **Scoped vs flat import** — scoped: `new scan.SpatialScan()` ·
+> flat: `import { SpatialScan } from "@dnax/ml"`. Both are identical.
+
+`SpatialScan` (Kulldorff / SaTScan) detects **statistically significant
+spatial clusters** — e.g. a localized disease outbreak. It slides a circular
+window of every size around every zone, scores each window with the Poisson
+log-likelihood ratio (cases vs population-expected), and assesses the most
+likely cluster with a Monte-Carlo p-value (random datasets with the same
+total cases distributed by population).
+
+```ts
+import { scan } from "@dnax/ml";
+
+// 1) Baseline: zone geometry + population + usual case counts
+const scanModel = new scan.SpatialScan({ replications: 999, randomState: 42 });
+scanModel.fit(zones, {
+  zone: "zone",
+  coordinates: ["lon", "lat"],
+  population: "population",
+  cases: "cases", // baseline (background) case rate
+});
+
+// 2) Current period: scan the new case counts
+const cluster = scanModel.cluster(current); // { zones, cases, expected, llr, pValue } | null
+const tracked = scanModel.fill_predict(current); // rows + cluster: boolean
+```
+
+| Model                                                        | Purpose                                                        |
+| ------------------------------------------------------------ | -------------------------------------------------------------- |
+| [SpatialScan](http://localhost:3000/10-scan/01-spatial-scan) | "where is the most likely cluster?" (with population)          |
+| [GetisOrd](http://localhost:3000/10-scan/02-getis-ord)       | "which zones are statistically hot right now?" (no population) |
+
+## When to use which
+
+| Question                                                             | Model                |
+| -------------------------------------------------------------------- | -------------------- |
+| "Where is the most likely cluster?" (retrospective, with population) | `SpatialScan`        |
+| "Which zones are statistically hot right now?" (map of hotspots)     | `GetisOrd`           |
+| "Cluster the cases without a population denominator"                 | `DBSCAN` / `HDBSCAN` |
+
+
+# Model Scoring
+
+```ts
+// Regressors → R² + MSE + MAE
+reg.score(data); // number — R² (1 = perfect fit)
+reg.mse(data); // number — mean squared error (0 = perfect)
+reg.mae(data); // number — mean absolute error (0 = perfect)
+
+// Classifiers → accuracy + full report
+clf.score(data); // number — accuracy
+clf.classificationReport(data); // { accuracy, precision, recall, fScore,
+//   support, confusionMatrix }
+
+// Fβ — beta weights recall (default 1 = F1; 2 = recall twice as important,
+// 0.5 = precision twice as important)
+clf.classificationReport(data, 2).fScore; // F2
+import { fbetaFromPrecisionRecall } from "@dnax/ml";
+fbetaFromPrecisionRecall(0.5, 0.8, 2); // 0.714 — F2 from precision/recall
+
+// Classifiers with predict_proba (LogisticRegression, ExtraTreeClassifier,
+// AdaBoostClassifier, GradientBoostingClassifier, XGBoostClassifier) → ROC
+clf.rocAucScore(data); // number — AUC (1 = perfect, 0.5 = random, binary only)
+```
+
+## Reading the scores
+
+- **R²**: 1 = perfect, 0 = no better than predicting the mean, negative =
+  worse than the mean. Compare models with the CV **mean**, and check the
+  fold spread (a stable model has tight folds).
+- **AUC**: threshold-free ranking quality — 1 = perfect separation,
+  0.5 = random.
+- **Fβ** (classification): `classificationReport(data, beta)` — `fScore` is
+  F1 by default; β > 1 favors recall (missed positives are costly),
+  β < 1 favors precision (false alarms are costly). Never rely on accuracy
+  alone on imbalanced data.
+- On small datasets, single-fold scores are noisy: prefer the mean of a
+  repeated k-fold over one arbitrary split.
+
+
+# Splits & Cross-validation
+
+```ts
+import { trainTestSplit, crossValScore } from "@dnax/ml";
+
+// Train/test split (JSON-first, seeded, stratified by a field)
+const { train, test } = trainTestSplit(data, {
+  testSize: 0.3,
+  shuffle: true,
+  randomState: 42,
+  stratify: "achete", // preserves class proportions in both folds
+});
+reg.fit(train, { features: ["x"], target: "y" });
+const r2 = reg.score(test);
+
+// K-fold cross-validation — compare models without one arbitrary split
+const scores = crossValScore(
+  () => new LinearRegression(), // fresh model per fold
+  data,
+  { features: ["x"], target: "y" },
+  { cv: 5, scoring: "score", randomState: 42 }, // 'score' | 'mse' | 'rocAucScore'
+);
+// → [0.91, 0.88, 0.93, ...] — one score per fold
+```
+
+`crossValScore` stratifies automatically when the target is discrete with
+enough samples per class, and falls back to plain k-fold otherwise.
+
+
+# Leaderboard
+
+`compareModels` trains, evaluates and **ranks** several models on the same
+case — the same data + spec + folds, one fresh model per fold (via
+`crossValScore`). Use models of the same family: all regressors (R²
+comparable) or all classifiers (accuracy comparable).
+
+```ts
+import { compareModels, detectTask } from "@dnax/ml";
+
+// 0) What ML case is this?
+const task = detectTask(data, { features: ["age", "annees_exp"], target: "salaire" });
+// → "regression"  ("classification" when the target is boolean / discrete)
+
+const leaderboard = compareModels(
+  {
+    linear: () => new LinearRegression(),
+    ridge: () => new RidgeRegression({ alpha: 1 }),
+    gbr: () => new GradientBoostingRegressor({ randomState: 42 }),
+    knn: () => new KNeighborsRegressor(),
+  },
+  data,
+  { features: ["age", "annees_exp"], target: "salaire" }, // scale: true propagé
+  { cv: 5, scoring: "score", randomState: 42 },
+);
+// → [{ name, mean, std, scores: [...] }, ...] — sorted best first
+const best = leaderboard[0];
+```
+
+- `scoring` default `'score'` uses each model's own `score()`: R² for
+  regressors, accuracy for classifiers (the ML case is detected per model).
+  For `'mse'`/`'mae'` the ranking is ascending (lower = better).
+- `std` is the fold spread — prefer a model with a tight `std` over a
+  slightly higher mean from one lucky fold.
+
+## `detectTask` — which ML case is this?
+
+Tells you whether a `{ features, target }` spec is a **classification** or a
+**regression** problem: the target is boolean, or has few unique values
+(≤ 10 and a minority of the rows) → `'classification'`, otherwise
+`'regression'`. Use it to pick a model family or a default scoring.
+
+```ts
+import { detectTask } from "@dnax/ml";
+
+detectTask(clients, { features: ["age", "solde"], target: "achete" });
+// → "classification"  (boolean target)
+
+detectTask(employees, { features: ["annee", "age"], target: "salaire" });
+// → "regression"
+```
+
+
+# Streaming
+
+`predictStream` and `fillPredictStream` process rows **in chunks**, so you can
+run inference over millions of rows (file, database, API) without loading
+them all into memory. They accept arrays, generators and async generators:
+
+```ts
+import { predictStream, fillPredictStream } from "@dnax/ml";
+
+// read rows from anywhere (NDJSON file, DB cursor, API)
+async function* rows() {
+  for await (const line of Bun.stdin.stream()) {
+    yield JSON.parse(line.toString());
+  }
+}
+
+// stream predictions, one per row
+for await (const pred of predictStream(reg, rows(), { chunkSize: 1000 })) {
+  // → one prediction per row, as they arrive
+}
+
+// stream enriched rows (like fill_predict, memory bounded)
+await fillPredictStream(reg, rows(), (row) => {
+  console.log(row); // { ..., target: prediction }
+});
+```
+
+Works with **every supervised model** (one generic implementation — no
+per-model duplication). `chunkSize` controls the memory/compute trade-off.
+
+
+# Metric Library
+
+Pure functions on arrays (exported from `@dnax/ml`), useful for custom
+workflows and thresholds. Convention: **predictions first, truth second** for
+label metrics; **truth first** for probability/curve metrics (kml style).
+
+## Regression
+
+```ts
+import { rmse, mape, medianAbsoluteError } from "@dnax/ml";
+
+rmse(preds, truth);            // √MSE — same units as the target (euros, sales…)
+mape(preds, truth);            // average % off (0.05 = 5% off on average)
+medianAbsoluteError(preds, truth); // robust to outliers (median of |y − p|)
+```
+
+## Classification
+
+```ts
+import { mcc, balancedAccuracy, logLoss, prAucScore, rocCurve, optimalThreshold } from "@dnax/ml";
+
+mcc(preds, truth);             // Matthews −1..+1 — the robust number for imbalanced data
+balancedAccuracy(preds, truth); // macro recall — "honest" accuracy on imbalance
+
+// Needs a predict_proba model (proba = model.predict_proba(data)[:, 1]):
+logLoss(truth, proba);         // cross-entropy — punishes confident & wrong probas
+prAucScore(truth, proba);      // precision-recall AUC — THE metric for epidemic/fraud
+rocCurve(truth, proba);        // { fpr, tpr, thresholds } — full curve for plots
+optimalThreshold(truth, proba); // Youden's J — best decision threshold
+```
+
+```ts
+// Pharma example: turn probabilities into alerts at the optimal threshold
+const proba = clf.predict_proba(newSales).map((p) => p[1]);
+const seuil = optimalThreshold(historiqueVrai, historiqueProba);
+const alertes = proba.map((p) => p >= seuil); // → boolean alerts
+```
+
+**Which one for imbalanced detection?** `prAucScore` (and `mcc`) drop when
+false alarms grow, unlike `rocAucScore` which stays optimistic — prefer them
+for epidemic/fraud cases.
+
+
+# Overview
+
+> **Scoped vs flat import** — scoped: `evaluation.compareModels({...}, data, spec)` ·
+> flat: `import { compareModels } from "@dnax/ml"`. Both are identical.
+
+Every supervised model scores itself on rows that include the `target` field
+(ground truth), reusing the transformation learned at fit time (rows dropped
+by the `'drop'` strategy are excluded).
+
+Implemented on: 14 regressors (`score`/`mse`/`mae`) and 9 classifiers
+(`score`/`classificationReport(data, beta?)`, + `rocAucScore` on the 5 with
+`predict_proba`). Clustering, IsolationForest, monitoring and scan have no
+target → no `score`.
+
+The ground truth convention matches kml: **predictions first, truth second**.
+
+| Page                                                                              | What it covers                                                                    |
+| --------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| [Model scoring](http://localhost:3000/11-evaluation/01-model-scoring)             | `score`, `mse`, `mae`, `classificationReport`, `rocAucScore` + reading the scores |
+| [Splits & cross-validation](http://localhost:3000/11-evaluation/02-splits-and-cv) | `trainTestSplit`, `crossValScore`                                                 |
+| [Leaderboard](http://localhost:3000/11-evaluation/03-leaderboard)                 | `compareModels` + `detectTask`                                                    |
+| [Streaming](http://localhost:3000/11-evaluation/04-streaming)                     | `predictStream`, `fillPredictStream`                                              |
+| [Metric library](http://localhost:3000/11-evaluation/05-metric-library)           | `rmse`, `mape`, `mcc`, `prAucScore`, `optimalThreshold`…                          |
+
+
+# Univariate Scoring
+
+One result per feature, **sorted by score** (most informative first):
+
+| Function                                  | Target         | Returns          | Captures                                |
+| ----------------------------------------- | -------------- | ---------------- | --------------------------------------- |
+| `chi2(data, spec)`                        | classification | score + `pValue` | linear (requires non-negative features) |
+| `fClassif(data, spec)`                    | classification | score + `pValue` | linear (ANOVA F)                        |
+| `mutualInfoClassif(data, spec, opts?)`    | classification | score            | **non-linear** links                    |
+| `mutualInfoRegression(data, spec, opts?)` | regression     | score            | **non-linear** links                    |
+
+```ts
+import { featureSelection } from "@dnax/ml";
+
+const ranking = featureSelection.mutualInfoClassif(data, {
+  features: ["age", "solde", "nb_visites", "inutile"],
+  target: "achete",
+});
+// → [
+//     { feature: "age", score: 0.42 },
+//     { feature: "nb_visites", score: 0.18 },
+//     { feature: "solde", score: 0.09 },
+//     { feature: "inutile", score: 0.01 },
+//   ]  — most informative first
+
+const top3 = ranking.slice(0, 3).map((r) => r.feature);
+clf.fit(data, { features: top3, target: "achete" });
+```
+
+`mutualInfo*` options: `discreteFeatures` (boolean or per-feature), `nNeighbors`
+(default 5), `randomState`.
+
+
+# SelectFromModel
+
+Fits an estimator (any model exposing `featureImportances` — trees/ensemble —
+or `coef` — linear models), reads its per-feature importance, and keeps the
+features above a threshold (`'mean'` | `'median'` | an explicit number),
+optionally capped to the top-k (`maxFeatures`).
+
+```ts
+import { featureSelection, LassoRegression } from "@dnax/ml";
+
+const sel = new featureSelection.SelectFromModel({
+  estimator: new LassoRegression({ alpha: 1 }),
+  threshold: "mean",
+  maxFeatures: 5, // optional hard cap
+});
+sel.fit(data, { features: ["salaire", "bruit"], target: "age" });
+
+sel.selectedFeatures; // ["salaire"] — ready for a fresh fit spec
+sel.support;          // [true, false] — boolean mask aligned with the features
+sel.featureScores;    // per-feature importances (|coef| mean, or featureImportances)
+sel.fittedEstimator;  // the trained estimator
+```
+
+**Notes**
+
+- `options.oneHot` must stay **off** (throws otherwise): each importance
+  value must map to exactly one `spec.features` entry.
+- For linear classifiers, importance = mean `|coef|` across classes.
+- `SelectFromModel` is a selection **utility** (like `trainTestSplit`) — no
+  `export`/`load`; persist the base estimator instead, then re-select.
+
+
+# Overview
+
+> **Scoped vs flat import** — scoped: `featureSelection.chi2(data, spec)` ·
+> flat: `import { chi2 } from "@dnax/ml"`. Both are identical.
+
+Feature selection removes **weak or redundant columns before training**. It
+reduces cost, improves interpretability, and limits overfitting. Two
+families: **univariate scoring** (each feature scored independently against
+the target) and **model-based selection** (keep what a trained model finds
+important).
+
+**⚠️ Numeric features only**: the scores stay *per feature*, so one-hot is
+not applied. Boolean targets are encoded automatically (→ 1/0).
+`options.missing` is honored (`'throw'` default | `'fill0'` | `'drop'` whole
+row). Features are sorted alphabetically, matching the transformer layout.
+
+| Page                                                                               | What it covers                                                  |
+| ---------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| [Univariate scoring](http://localhost:3000/12-feature-selection/01-univariate)     | `chi2`, `fClassif`, `mutualInfoClassif`, `mutualInfoRegression` |
+| [SelectFromModel](http://localhost:3000/12-feature-selection/02-select-from-model) | model-based selection with a threshold                          |
+
+## Tips
+
+- **Rank first, then model**: start with `mutualInfo` (non-linear) to discard
+  obvious noise, then confirm with `SelectFromModel` before the final fit.
+- **Feature importance is not causality** — it ranks association strength,
+  which is exactly what you want for column pruning.
+- Compare models before/after reduction with
+  [cross-validation](http://localhost:3000/11-evaluation): fewer columns should not hurt the CV
+  score, and usually improves it on small datasets.
+
+
+# Persistence
+
+Export (async, writes `<name>.json` with model params + learned
+transformation) and load (async, restores a previously exported model):
+
+```ts
+// Export
+await reg.export("my-model"); // → my-model.json
+
+// Load
+const restored = new LinearRegression();
+await restored.load("my-model");
+restored.predict(newData); // works with the same columns
+
+// Restore directly from parameters
+const fromParams = new LinearRegression({
+  coef: reg.coef,
+  intercept: reg.intercept,
+});
+```
+
+The export file is **versioned** (`version` field). `load` rejects files with
+an unsupported version to protect against format changes.
+
+
+# Model Parameters
+
+```ts
+reg.coef; // number[] — coefficients (one per feature)
+reg.intercept; // number   — bias term
+
+reg.getParams(); // { coef: number[], intercept: number }
+reg.setParams({ coef, intercept }); // injects parameters, throws on unknown keys, returns this
+```
+
+`setParams` / `getParams` follow the sklearn vocabulary and let you restore a
+model without re-training. Unknown keys throw.
+
+
+# predictAsync
+
+Like `predict`, but offloads the matrix-vector multiplication to a worker
+(via kml `asyncMode`), keeping the event loop responsive on large prediction
+sets. The JSON → matrix transformation still runs on the main thread.
+
+```ts
+const preds = await reg.predictAsync(bigData);
+```
+
+Available on the linear regressors (all but `LogisticRegression`).
+
+
+# Utilities
+
+```ts
+reg.columnNames; // string[] — X column names (useful to interpret coefficients)
+reg.droppedRows; // number — rows removed by the 'drop' missing strategy
+```
+
+
+# Overview
+
+> **Scoped vs flat import** — scoped: `new linear.LinearRegression()` ·
+> flat: `import { LinearRegression } from "@dnax/ml"`. Both are identical.
+
+Every model in the SDK supports `export` / `load` — including the monitoring
+models (CUSUM, EWMA, ParallelMonitor, SeasonalMonitor), the spatial scan, and
+the clusters.
+
+| Page                                                                   | What it covers                                |
+| ---------------------------------------------------------------------- | --------------------------------------------- |
+| [Persistence](http://localhost:3000/13-persistence/01-persistence)     | `export` / `load` / restore from params       |
+| [Model parameters](http://localhost:3000/13-persistence/02-parameters) | `coef`, `intercept`, `getParams`, `setParams` |
+| [predictAsync](http://localhost:3000/13-persistence/03-predict-async)  | worker offload                                |
+| [Utilities](http://localhost:3000/13-persistence/04-utilities)         | `columnNames`, `droppedRows`                  |
+
+
+# Linear
+
+Common surface: `fit`, `predict`, `fill_predict`, `predictAsync`, `score`
+(R²), `mse`, `mae`, `getParams()`, `setParams()`, `export`, `load`, `coef`,
+`intercept`.
+
+| Class                  | Constructor params           | Notes                                                                       |
+| ---------------------- | ---------------------------- | --------------------------------------------------------------------------- |
+| `LinearRegression`     | —                            | ordinary least squares                                                      |
+| `RidgeRegression`      | `alpha` (1)                  | L2 regularization                                                           |
+| `LassoRegression`      | `alpha` (1)                  | L1, zeroes uninformative features                                           |
+| `ElasticNet`           | `alpha` (1), `l1Ratio` (0.5) | L1 + L2                                                                     |
+| `LogisticRegression`   | —                            | + `predict_proba`, `fill_predict_proba`, `rocAucScore`; binary & multiclass |
+| `RidgeClassifier`      | `alpha` (1)                  | labels only, no `predict_proba`                                             |
+| `RANSACRegressor`      | `randomState`                | + `inlierMask`, `nTrials` getters                                           |
+| `PoissonRegressor`     | `alpha` (1)                  | counts, predictions `>= 0`; + `nIter`                                       |
+| `PolynomialRegression` | `degree` (2)                 | + `degree` getter                                                           |
+
+```ts
+const reg = new linear.RidgeRegression({ alpha: 1 });
+reg.fit(data, { features: ["x"], target: "y" });
+reg.score(test);        // R²
+reg.mse(test);          // MSE
+reg.mae(test);          // MAE
+await reg.predictAsync(big); // worker offload
+```
+
+
+# Tree
+
+Common surface: `fit`, `predict`, `fill_predict`, `score`, `export`, `load`,
+`featureImportances`.
+
+| Class                    | Params                                                                       | Notes                                                  |
+| ------------------------ | ---------------------------------------------------------------------------- | ------------------------------------------------------ |
+| `DecisionTreeClassifier` | `max_depth`, `min_samples_split`, `criterion`, `max_features`, `randomState` | no `predict_proba`                                     |
+| `DecisionTreeRegressor`  | same                                                                         | + `mse`, `mae`                                         |
+| `ExtraTreeClassifier`    | same                                                                         | + `predict_proba`, `fill_predict_proba`, `rocAucScore` |
+| `ExtraTreeRegressor`     | same                                                                         | + `mse`, `mae`                                         |
+
+
+# Ensemble
+
+Common surface: `fit`, `predict`, `fill_predict`, `score`, `export`, `load`,
+`featureImportances`.
+
+| Class                        | Key params                                                                                                                                 | Notes                                                                |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------- |
+| `IsolationForest`            | `subsampling_size`, `tree_num`, `contamination`, `random_state`                                                                            | unsupervised anomaly; `predict` (1 = anomaly) + `anomaly_score(row)` |
+| `RandomForestClassifier`     | `nEstimators`, `maxDepth`, `maxFeatures`, `criterion`, `randomState`                                                                       | no `predict_proba`                                                   |
+| `RandomForestRegressor`      | same                                                                                                                                       | + `mse`, `mae`                                                       |
+| `AdaBoostClassifier`         | `nEstimators`, `learningRate`, `randomState`                                                                                               | + proba + `rocAucScore`                                              |
+| `AdaBoostRegressor`          | same                                                                                                                                       | + `mse`, `mae`                                                       |
+| `GradientBoostingClassifier` | `nEstimators`, `learningRate`, `maxDepth`, `minSamplesSplit`, `subsample`, `maxFeatures`, `randomState`                                    | + proba + `rocAucScore`                                              |
+| `GradientBoostingRegressor`  | same                                                                                                                                       | + `mse`, `mae`                                                       |
+| `XGBoostClassifier`          | `nEstimators`, `learningRate`, `maxDepth`, `lambda`, `gamma`, `minChildWeight`, `subsample`, `colsampleByTree`, `baseScore`, `randomState` | + proba + `rocAucScore`                                              |
+| `XGBoostRegressor`           | same                                                                                                                                       | + `mse`, `mae`                                                       |
+
+
+# Clustering
+
+Spec has **no target** — only `features`.
+
+| Class     | Params                                                                                           | Methods & getters                                                                                           |
+| --------- | ------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------- |
+| `KMeans`  | `n_clusters`, `tol`, `max_iter`, `initCenters`, `random_state`                                   | `fit`, `predict` (nearest centroid), `fit_predict`, `export`, `load` · `labels_`, `centroids`, `inertia`    |
+| `DBSCAN`  | `eps`, `minSamples`, `distanceType`                                                              | `fit`, `fit_predict`, `export`, `load` · `labels_` (`-1` = noise). No `predict` on new points               |
+| `HDBSCAN` | `min_cluster_size`, `min_samples`, `cluster_selection_epsilon`, `metric`, `allow_single_cluster` | `fit`, `fit_predict`, `export`, `load` · `labels_`, `probabilities` (0 = noise). No `predict` on new points |
+
+
+# Neighbors
+
+Instance-based (non-parametric) learning: predictions come from the nearest
+labeled examples, no model is learned. **Distance-based** — use
+`options: { scale: true }`.
+
+| Class                  | Params                                                                 | Notes                                                                                                                                                     |
+| ---------------------- | ---------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `KNeighborsClassifier` | `kNeighbors` (5), `weightType`, `distanceType`, `pNorm`                | + `score`, `classificationReport`, `classes`, `getParams()`/`setParams()`. No `predict_proba`. sklearn aliases accepted (`nNeighbors`/`weights`/`metric`) |
+| `KNeighborsRegressor`  | `nNeighbors` (5), `weights` (`'uniform'`\|`'distance'`), `metric`, `p` | + `score`, `mse`, `mae`, `getParams()`/`setParams()`. kml aliases accepted (`kNeighbors`/`weightType`/`distanceType`)                                     |
+
+```ts
+const knn = new neighbors.KNeighborsClassifier({ kNeighbors: 5 });
+knn.fit(data, { features: ["age", "solde"], target: "achete", options: { scale: true } });
+knn.predict(data); // labels
+```
+
+
+# Monitoring
+
+`MonitorSpec` = `{ field, missing? }`. Common surface: `fit`, `predict`,
+`scores`, `fill_predict`, `export`, `load`.
+
+| Class             | Params                                                                                                            | Extra                                                                                                                                  |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `CUSUM`           | `target`, `std`, `k` (0.5σ), `h` (5σ), `direction` (`'increase'`\|`'decrease'`\|`'both'`), `robust`, `alertField` | `changePoint(data)`, `update(row)`, `reset()` · getters `target`, `std`, `slack`, `threshold`, `direction`                             |
+| `EWMA`            | `lambda` (0.25), `limit` (3), `target`, `std`, `robust`, `alertField`                                             | `limits(data)`, `update(row)`, `reset()` · getters `target`, `std`, `lambda`, `limit`                                                  |
+| `ParallelMonitor` | `model` (`'cusum'`\|`'ewma'`), `familyError`, `alertField`, `alertFieldsField`                                    | `ParallelSpec` = `{ fields, params?, missing? }` · `alertFields(data)`, `update(row)` · getters `monitoredFields`, `targets`, `params` |
+| `SeasonalMonitor` | `model`, `alertField`, `chart`                                                                                    | `SeasonalSpec` = `{ field, dateField, missing? }` · `changePoint`, `limits` (per model), `update(row)` · getter `dayProfile`           |
+
+
+# Spatial Scan
+
+`ScanSpec` = `{ zone, coordinates: [xField, yField], population, cases }` ·
+`HotspotSpec` = `{ zone, coordinates: [xField, yField], cases }`.
+
+| Class         | Params                                                                                                | Methods & getters                                                                                                                          |
+| ------------- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `SpatialScan` | `replications` (199), `significance` (0.05), `maxWindowFraction` (0.5), `randomState`, `clusterField` | `fit`, `cluster(data)` → `ScanCluster | null`, `predict`, `fill_predict`, `export`, `load` · getters `zonesList`, `expectedRate`           |
+| `GetisOrd`    | `distance`, `significance` (0.05), `hotField`                                                         | `fit`, `hotspots(data)` → `HotspotResult[]`, `predict`, `fill_predict`, `export`, `load` · getters `zonesList`, `distance`, `significance` |
+
+`ScanCluster` = `{ zones: string[], cases, expected, llr, pValue }` ·
+`HotspotResult` = `{ zone, zScore, pValue, hot, cold }`.
+
+
+# Feature Selection
+
+Rank or select the informative columns before training (lower cost, better
+interpretability, less overfitting) — full guide on
+[Feature selection](http://localhost:3000/12-feature-selection). Features must be **numeric or
+boolean** (one-hot is not applied — the scores stay per feature);
+`options.missing` is honored. `spec` is a `JsonFitSpec`.
+
+Univariate scoring (`featureSelection.*`): one result per feature, **sorted
+by score** (most informative first). `chi2` / `fClassif` are for
+classification targets and include a `pValue`; `mutualInfoClassif` /
+`mutualInfoRegression` capture **non-linear** links (no p-value).
+
+```ts
+import { featureSelection } from "@dnax/ml";
+
+const ranking = featureSelection.mutualInfoClassif(data, {
+  features: ["age", "solde", "nb_visites", "inutile"],
+  target: "achete",
+});
+// → [{ feature: "age", score: 0.42 }, ...] — pick the top k, feed a new spec
+```
+
+Model-based selection (`featureSelection.SelectFromModel`): fits an
+estimator (`coef` from linear models, or `featureImportances` from
+trees/ensemble), keeps the features above a threshold (`'mean'` |
+`'median'` | number, optional `maxFeatures` top-k).
+
+```ts
+const sel = new featureSelection.SelectFromModel({
+  estimator: new LassoRegression({ alpha: 1 }),
+  threshold: "mean",
+});
+sel.fit(data, { features: ["salaire", "bruit"], target: "age" });
+sel.selectedFeatures; // ["salaire"] — ready for a fresh fit spec
+sel.support;          // [true, false]
+sel.featureScores;    // per-feature importances
+sel.fittedEstimator;  // the trained estimator
+```
+
+
+# Evaluation
+
+Functions are exported flat **and** through the `evaluation` namespace
+(`evaluation.compareModels`, `evaluation.mcc`, … — same functions):
+
+```ts
+trainTestSplit(data, { testSize?, trainSize?, shuffle?, randomState?, stratify? });
+// → { train: JsonRow[], test: JsonRow[] }
+
+crossValScore(() => new LinearRegression(), data, spec, { cv?, scoring?, stratify?, randomState? });
+// → number[] — one score per fold
+
+compareModels({ linear: () => new LinearRegression(), ridge: () => new RidgeRegression({ alpha: 1 }) }, data, spec,
+  { cv?, scoring?, stratify?, randomState? });
+// → ModelBenchmark[] — { name, mean, std, scores }[] sorted best first
+
+detectTask(data, spec); // → 'classification' | 'regression'
+
+// Streaming inference (memory bounded, works with generators/async iterables)
+for await (const pred of predictStream(model, rows, { chunkSize? })) { /* ... */ }
+await fillPredictStream(model, rows, (row) => { /* ... */ }, { chunkSize? });
+
+meanAbsoluteError(preds, truth);                    // MAE
+fbetaFromPrecisionRecall(precision, recall, beta);  // Fβ from raw values (β = 1 → F1)
+```
+
+Supervised models add:
+
+| Method                              | Returns                                                                                                                               | Availability                       |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------- |
+| `score(data)`                       | `number` — R² (regressors) / accuracy (classifiers)                                                                                   | all 23 supervised models           |
+| `mse(data)`                         | `number` — mean squared error                                                                                                         | 14 regressors                      |
+| `mae(data)`                         | `number` — mean absolute error                                                                                                        | 14 regressors                      |
+| `classificationReport(data, beta?)` | `{ accuracy, precision, recall, fScore, support, confusionMatrix }` — `fScore` is Fβ (`beta` defaults to 1 = F1, β > 1 favors recall) | 9 classifiers                      |
+| `rocAucScore(data)`                 | `number` — AUC (binary)                                                                                                               | 5 classifiers with `predict_proba` |
+
+Pure metric functions (arrays in, number/curve out):
+
+```ts
+// Regression — predictions first, truth second
+rmse(preds, truth);              // √MSE, target units
+mape(preds, truth);              // mean absolute percentage error
+medianAbsoluteError(preds, truth);
+
+// Classification
+mcc(preds, truth);               // Matthews correlation coefficient (−1..+1)
+balancedAccuracy(preds, truth);  // macro recall
+
+// Probability metrics — truth first (kml style), proba = positive class
+logLoss(truth, proba);           // cross-entropy
+prAucScore(truth, proba);        // precision-recall AUC (imbalance-friendly)
+rocCurve(truth, proba);          // → { fpr, tpr, thresholds }
+optimalThreshold(truth, proba);  // Youden's J — best decision threshold
+```
+
+
+# Spec Types
+
+```ts
+// Supervised
+interface JsonFitSpec { features: string[]; target: string; options?: JsonTransformOptions }
+
+// Unsupervised
+interface ClusterSpec { features: string[]; options?: JsonTransformOptions }
+```
+
+> **Supervised vs unsupervised**: supervised models (`JsonFitSpec`, 23 models)
+> have a `target` and expose `score`/`mse`/`mae`/`classificationReport`. Unsupervised
+> models take only `features` (`ClusterSpec`) and have no `score` — see
+> [Core concepts](http://localhost:3000/01-getting-started/03-core-concepts) for the full classification.
+
+```ts
+// Monitoring
+interface MonitorSpec { field: string; missing?: "throw" | "fill" }
+interface ParallelSpec { fields: string[]; params?: Record<string, unknown>; missing?: "throw" | "fill" }
+interface SeasonalSpec { field: string; dateField: string; missing?: "throw" | "fill" }
+
+// Spatial scan
+interface ScanSpec {
+  zone: string;
+  coordinates: [string, string];
+  population: string;
+  cases: string;
+}
+
+// Getis-Ord Gi* hotspot analysis
+interface HotspotSpec {
+  zone: string;
+  coordinates: [string, string];
+  cases: string;
+}
+
+// Options
+interface JsonTransformOptions {
+  oneHot?: boolean;      // default false
+  dropFirst?: boolean;   // default true
+  missing?: "throw" | "fill0" | "drop";  // default 'throw'
+  scale?: boolean;       // default false
+  noise?: number;        // Gaussian jittering, training only
+  noiseSeed?: number;    // reproducibility
+}
+```
+
+
+# Overview
+
+> **Scoped vs flat import** — scoped: `new linear.RidgeRegression()` ·
+> flat: `import { RidgeRegression } from "@dnax/ml"`. Both are identical.
+
+Every model follows the same contract: `fit(data, spec)` → `predict(data)` →
+`fill_predict(data)` → `export(name)` / `load(name)`, plus `score(data)` on
+supervised models. Getters `columnNames` and `droppedRows` are common to all.
+
+| Page                                                                             | Families                                         |
+| -------------------------------------------------------------------------------- | ------------------------------------------------ |
+| [Linear](http://localhost:3000/14-api-reference/01-linear)                       | 9 regression & classification models             |
+| [Tree](http://localhost:3000/14-api-reference/02-tree)                           | DecisionTree & ExtraTree                         |
+| [Ensemble](http://localhost:3000/14-api-reference/03-ensemble)                   | forests, boosting, IsolationForest               |
+| [Clustering](http://localhost:3000/14-api-reference/04-clustering)               | KMeans, DBSCAN, HDBSCAN                          |
+| [Neighbors](http://localhost:3000/14-api-reference/05-neighbors)                 | kNN classifier & regressor                       |
+| [Monitoring](http://localhost:3000/14-api-reference/06-monitoring)               | CUSUM, EWMA, ParallelMonitor, SeasonalMonitor    |
+| [Spatial scan](http://localhost:3000/14-api-reference/07-scan)                   | SpatialScan, GetisOrd                            |
+| [Feature selection](http://localhost:3000/14-api-reference/08-feature-selection) | univariate + SelectFromModel                     |
+| [Evaluation](http://localhost:3000/14-api-reference/09-evaluation)               | splits, CV, leaderboard, metrics                 |
+| [Spec types](http://localhost:3000/14-api-reference/10-spec-types)               | JsonFitSpec, ClusterSpec, MonitorSpec, ScanSpec… |
+
+
+# Linear
+
+## `LinearRegression` — predict salary from seniority
+
+**When to use it** — the relationship looks like a straight line and you need a
+**continuous number** out: salary, price, sales volume, delivery time. Use the
+`coef`/`intercept` getters to explain the impact of each feature.
+
+```ts
+const employees = [
+  { years: 1, salary: 30000 },
+  { years: 2, salary: 36000 },
+  { years: 3, salary: 42000 },
+  { years: 4, salary: 48000 },
+  { years: 5, salary: 54000 },
+];
+const reg = new linear.LinearRegression();
+reg.fit(employees, { features: ["years"], target: "salary" });
+reg.predict([{ years: 6 }]);  // → [~60000]
+reg.coef;                     // → [~6000]  (1 year = +6000 €)
+reg.intercept;                // → ~24000
+```
+
+## `LogisticRegression` — will the client buy? (boolean target)
+
+**When to use it** — the answer is a **yes/no** (or a class) and you want the
+**probability**, not just the label: churn, fraud, will-buy, disease risk. Use
+`predict_proba` to rank rows or trigger alerts.
+
+```ts
+const clients = [
+  { age: 20, balance: 100, bought: false },
+  { age: 35, balance: 5000, bought: true },
+  { age: 45, balance: 9000, bought: true },
+  { age: 25, balance: 300, bought: false },
+  { age: 30, balance: 1200, bought: false },
+];
+const clf = new linear.LogisticRegression();
+clf.fit(clients, { features: ["age", "balance"], target: "bought" });
+clf.predict([{ age: 38, balance: 7000 }]);         // → [1]
+clf.predict_proba([{ age: 38, balance: 7000 }]);   // → [[~0, ~1]] (confident on this tiny set)
+clf.fill_predict(clients); // → rows + bought: true | false
+```
+
+## `RidgeRegression` — revenue with correlated features (ads ≈ stores×2)
+
+**When to use it** — like `LinearRegression` but your features are
+**correlated** (multicollinearity): it shrinks the coefficients (L2) so they
+stay stable and interpretable instead of exploding.
+
+```ts
+const sales = [
+  { ads: 1, stores: 2, revenue: 100 },
+  { ads: 2, stores: 4, revenue: 210 },
+  { ads: 3, stores: 6, revenue: 305 },
+  { ads: 4, stores: 8, revenue: 415 },
+  { ads: 5, stores: 10, revenue: 500 },
+];
+const reg = new linear.RidgeRegression({ alpha: 1 });
+reg.fit(sales, { features: ["ads", "stores"], target: "revenue" });
+reg.coef; // → STABLE coefficients despite ads ≈ stores×2 correlation
+```
+
+## `LassoRegression` — feature selection (shoe\_size dropped)
+
+**When to use it** — you have many features and suspect most are noise. The L1
+penalty **zeroes the useless ones**, giving you a smaller, interpretable model
+— a built-in feature selector.
+
+```ts
+const data = [
+  { age: 30, experience: 5, shoe_size: 42, salary: 38000 },
+  { age: 35, experience: 8, shoe_size: 44, salary: 48000 },
+  { age: 40, experience: 12, shoe_size: 43, salary: 57000 },
+  { age: 45, experience: 16, shoe_size: 41, salary: 66000 },
+  { age: 50, experience: 20, shoe_size: 45, salary: 75000 },
+];
+const reg = new linear.LassoRegression({ alpha: 1 });
+reg.fit(data, { features: ["age", "experience", "shoe_size"], target: "salary" });
+reg.coef; // → shoe_size ≈ 0 (uninformative → zeroed out)
+```
+
+## `ElasticNet` — L1 + L2 combined
+
+**When to use it** — both worlds: **correlated features AND useless columns**.
+L1 + L2 is the robust compromise when you don't know which of the two problems
+you have.
+
+```ts
+const data = [
+  { age: 30, experience: 5, noise: 1, salary: 38000 },
+  { age: 35, experience: 8, noise: 0, salary: 48000 },
+  { age: 40, experience: 12, noise: 2, salary: 57000 },
+  { age: 45, experience: 16, noise: 1, salary: 66000 },
+  { age: 50, experience: 20, noise: 3, salary: 75000 },
+];
+const reg = new linear.ElasticNet({ alpha: 1, l1Ratio: 0.5 });
+reg.fit(data, { features: ["age", "experience", "noise"], target: "salary" });
+reg.coef; // → noise ≈ 0, age/experience stay stable
+```
+
+## `RidgeClassifier` — admitted or not (labels, no probabilities)
+
+**When to use it** — fast **label-only** classifier. Use as a quick baseline or
+when you only need a yes/no decision (not a probability) on large data.
+
+```ts
+const candidates = [
+  { grade: 8, hours: 5, admitted: false },
+  { grade: 12, hours: 8, admitted: false },
+  { grade: 14, hours: 10, admitted: true },
+  { grade: 16, hours: 12, admitted: true },
+  { grade: 18, hours: 15, admitted: true },
+];
+const clf = new linear.RidgeClassifier({ alpha: 1 });
+clf.fit(candidates, { features: ["grade", "hours"], target: "admitted" });
+clf.predict([{ grade: 15, hours: 11 }]); // → [1]
+clf.classes;                             // → [0, 1]
+```
+
+## `RANSACRegressor` — robust to outliers (bad measurement ignored)
+
+**When to use it** — your data contains **bad measurements** (sensor glitch,
+manual entry error, one-off event): it fits the healthy line and ignores the
+noise. `inlierMask` flags the bad rows for investigation.
+
+```ts
+const measurements = [
+  { x: 1, y: 3.1 },
+  { x: 2, y: 30 },   // ← outlier (bad measurement)
+  { x: 3, y: 9.2 },
+  { x: 4, y: 12.1 },
+  { x: 5, y: 15.0 },
+];
+const reg = new linear.RANSACRegressor({ randomState: 42 });
+reg.fit(measurements, { features: ["x"], target: "y" });
+reg.inlierMask; // → 4 true + 1 false — the bad measurement is rejected
+reg.coef;       // → ≈ 3 (healthy slope, outlier ignored)
+```
+
+## `PoissonRegressor` — counting sales (predictions ≥ 0)
+
+**When to use it** — the target is a **count**: units sold, incidents,
+patients per day, calls per hour. Predictions stay ≥ 0 and the model handles
+count data correctly, where `LinearRegression` could predict negative numbers.
+
+```ts
+const sales = [
+  { ads: 0, price: 5, units: 8 },
+  { ads: 1, price: 5, units: 14 },
+  { ads: 2, price: 4, units: 23 },
+  { ads: 3, price: 4, units: 31 },
+  { ads: 4, price: 3, units: 45 },
+];
+const reg = new linear.PoissonRegressor({ alpha: 0.1 });
+reg.fit(sales, { features: ["ads", "price"], target: "units" });
+reg.predict([{ ads: 5, price: 3 }]); // → ~69 (always ≥ 0)
+```
+
+## `PolynomialRegression` — nonlinear cost (quadratic curve)
+
+**When to use it** — the data **bends**: quadratic cost curves, price
+elasticities, diminishing returns. `degree` 2+ captures curvature a straight
+line misses.
+
+```ts
+const costs = [
+  { quantity: 1, cost: 11 },
+  { quantity: 2, cost: 24 },
+  { quantity: 3, cost: 41 },
+  { quantity: 4, cost: 60 },
+  { quantity: 5, cost: 83 },
+];
+const reg = new linear.PolynomialRegression({ degree: 2 });
+reg.fit(costs, { features: ["quantity"], target: "cost" });
+reg.predict([{ quantity: 6 }]); // → ≈ 108 (degree-2 least-squares fit)
+reg.degree;                      // → 2
+```
+
+
+# Neighbors
+
+## `KNeighborsClassifier` — fraudulent order? (by neighborhood)
+
+**When to use it** — **no training phase**: predictions come from the nearest
+labeled examples. Use as a non-parametric baseline, or when the decision
+boundary is very local (a fraud looks like the frauds near it). Distance-based
+→ `scale: true` is required.
+
+```ts
+const orders = [
+  { qty: 30, amount: 90, fraud: false },
+  { qty: 60, amount: 180, fraud: false },
+  { qty: 420, amount: 3200, fraud: true },
+  { qty: 480, amount: 3900, fraud: true },
+  { qty: 90, amount: 250, fraud: false },
+];
+const clf = new neighbors.KNeighborsClassifier({ kNeighbors: 3 });
+clf.fit(orders, {
+  features: ["qty", "amount"], target: "fraud",
+  options: { scale: true }, // distance-based → scaling is required
+});
+clf.predict([{ qty: 450, amount: 3600 }]); // → [1] (close to the frauds)
+clf.classes;                               // → [0, 1]
+```
+
+## `KNeighborsRegressor` — house price from surface area
+
+**When to use it** — same principle for a **continuous target**: the prediction
+is the average of the k nearest known values. Ideal for very local patterns
+(price per m² in a neighborhood, delivery time per route).
+
+```ts
+const houses = [
+  { area: 45, price: 120000 },
+  { area: 60, price: 155000 },
+  { area: 75, price: 190000 },
+  { area: 90, price: 230000 },
+  { area: 110, price: 280000 },
+];
+const reg = new neighbors.KNeighborsRegressor({ nNeighbors: 2 });
+reg.fit(houses, { features: ["area"], target: "price", options: { scale: true } });
+reg.predict([{ area: 70 }]); // → ≈ (155000 + 190000) / 2 = 172500
+```
+
+
+# Tree
+
+## `DecisionTreeClassifier` — flu? (readable if/then rules)
+
+**When to use it** — you need **readable if/then rules** you can explain to a
+human (regulatory audits, medical triage, loan decisions). Best with a small
+set of features.
+
+```ts
+const patients = [
+  { fever: 40, cough: true, flu: true },
+  { fever: 37, cough: false, flu: false },
+  { fever: 39, cough: true, flu: true },
+  { fever: 36.5, cough: false, flu: false },
+  { fever: 38.5, cough: false, flu: false },
+];
+const clf = new tree.DecisionTreeClassifier({ max_depth: 3 });
+clf.fit(patients, { features: ["fever", "cough"], target: "flu" });
+clf.predict([{ fever: 39.5, cough: true }]); // → [1]
+clf.featureImportances;                      // → [cough, fever] — fever dominates
+                                             //   (perfect fever split on 5 rows)
+```
+
+## `DecisionTreeRegressor` — salary by tiers (leaf mean, not a line)
+
+**When to use it** — the relationship is **stepwise**: salary bands, tax
+brackets, quantity discounts. It predicts the mean of the bucket, not a smooth
+line — perfect when real life jumps in levels.
+
+```ts
+const employees = [
+  { years: 1, salary: 30000 },
+  { years: 3, salary: 36000 },
+  { years: 5, salary: 45000 },
+  { years: 10, salary: 70000 },
+  { years: 15, salary: 92000 },
+];
+const reg = new tree.DecisionTreeRegressor({ max_depth: 3 });
+reg.fit(employees, { features: ["years"], target: "salary" });
+reg.predict([{ years: 8 }]); // → mean of the leaf group (piecewise, not linear)
+```
+
+## `ExtraTreeClassifier` — subscription churn (with probabilities)
+
+**When to use it** — same family but **randomized** and it **gives
+probabilities** (`predict_proba`, `rocAucScore`). Use when you need a
+probability output from a cheap tree model.
+
+```ts
+const subscribers = [
+  { months: 1, calls: 20, churned: false },
+  { months: 3, calls: 55, churned: false },
+  { months: 8, calls: 120, churned: true },
+  { months: 12, calls: 200, churned: true },
+  { months: 5, calls: 40, churned: false },
+];
+const clf = new tree.ExtraTreeClassifier({ max_depth: 3 });
+clf.fit(subscribers, { features: ["months", "calls"], target: "churned" });
+clf.predict_proba([{ months: 10, calls: 180 }]); // → [[~0, ~1]] (leaf fully confident)
+```
+
+## `ExtraTreeRegressor` — tomorrow's temperature
+
+**When to use it** — randomized tree for a **continuous target**: a solid
+cheap base model (forecasts, sensor values). `randomState` keeps it
+reproducible.
+
+```ts
+const days = [
+  { day: 1, temperature: 12 },
+  { day: 2, temperature: 14 },
+  { day: 3, temperature: 13 },
+  { day: 4, temperature: 17 },
+  { day: 5, temperature: 19 },
+];
+const reg = new tree.ExtraTreeRegressor({ max_depth: 3, randomState: 42 });
+reg.fit(days, { features: ["day"], target: "temperature" });
+reg.predict([{ day: 6 }]); // → mean of the nearest leaf
+```
+
+
+# Ensemble
+
+## `IsolationForest` — abnormal transaction (unsupervised)
+
+**When to use it** — **anomaly detection without labels**: flag the
+transactions/rows that stand out (fraud pre-screening, stock discrepancies,
+defective batches). `predict` → 1 = anomaly; `anomaly_score` ranks them.
+
+```ts
+const transactions = [
+  { amount: 120, hour: 14 },
+  { amount: 90, hour: 10 },
+  { amount: 3000, hour: 3 },   // ← anomaly
+  { amount: 150, hour: 18 },
+  { amount: 80, hour: 9 },
+];
+const model = new ensemble.IsolationForest({ random_state: 42 });
+model.fit(transactions, { features: ["amount", "hour"] });
+model.predict(transactions); // → [0, 0, 1, 0, 0] (1 = anomaly)
+model.anomaly_score({ amount: 3000, hour: 3 }); // → high continuous score
+```
+
+## `RandomForestClassifier` — fraudulent prescription
+
+**When to use it** — the **robust default** for tabular classification: handles
+nonlinearity and feature interactions with little tuning. Labels only (no
+`predict_proba`).
+
+```ts
+const rxSales = [
+  { qty: 60, age: 30, fraud: false },
+  { qty: 30, age: 25, fraud: false },
+  { qty: 420, age: 67, fraud: true },
+  { qty: 480, age: 71, fraud: true },
+  { qty: 90, age: 33, fraud: false },
+];
+const clf = new ensemble.RandomForestClassifier({ nEstimators: 50, maxDepth: 3, randomState: 42 });
+clf.fit(rxSales, { features: ["qty", "age"], target: "fraud" });
+clf.predict([{ qty: 400, age: 65 }]); // → [1]
+```
+
+## `RandomForestRegressor` — selling price from cost + margin
+
+**When to use it** — same default for **regression**: solid results without
+much tuning, harder to overfit than a single tree. Good when features interact
+(cost × margin → price).
+
+```ts
+const products = [
+  { cost: 5, margin: 2, price: 10 },
+  { cost: 8, margin: 3, price: 16 },
+  { cost: 12, margin: 5, price: 24 },
+  { cost: 20, margin: 8, price: 40 },
+  { cost: 30, margin: 10, price: 60 },
+];
+const reg = new ensemble.RandomForestRegressor({ nEstimators: 50, randomState: 42 });
+reg.fit(products, { features: ["cost", "margin"], target: "price" });
+reg.predict([{ cost: 15, margin: 6 }]); // → ≈ 30
+```
+
+## `AdaBoostClassifier` — loan default risk
+
+**When to use it** — sequential boosting of weak learners. Try it when
+`RandomForestClassifier` underperforms; it returns **probabilities** and works
+well on moderate-size tabular data.
+
+```ts
+const loans = [
+  { income: 1500, term: 12, default: false },
+  { income: 1800, term: 24, default: false },
+  { income: 900, term: 36, default: true },
+  { income: 1200, term: 48, default: true },
+  { income: 2200, term: 12, default: false },
+];
+const clf = new ensemble.AdaBoostClassifier({ nEstimators: 20, randomState: 42 });
+clf.fit(loans, { features: ["income", "term"], target: "default" });
+clf.predict_proba([{ income: 1000, term: 36 }]); // → [[~0.3, ~0.7]]
+```
+
+## `AdaBoostRegressor` — forecasting demand
+
+**When to use it** — boosting for a **continuous target**: good for demand,
+price and load forecasts when the features are clean.
+
+```ts
+const weeks = [
+  { week: 1, demand: 100 },
+  { week: 2, demand: 105 },
+  { week: 3, demand: 98 },
+  { week: 4, demand: 112 },
+  { week: 5, demand: 118 },
+];
+const reg = new ensemble.AdaBoostRegressor({ nEstimators: 20, randomState: 42 });
+reg.fit(weeks, { features: ["week"], target: "demand" });
+reg.predict([{ week: 6 }]); // → ≈ 120
+```
+
+## `GradientBoostingClassifier` — cardiovascular risk (calibrated probability)
+
+**When to use it** — the **strongest off-the-shelf tabular classifier** with
+calibrated probabilities. Use when accuracy matters most and you can tune
+`learningRate` / `maxDepth`.
+
+```ts
+const patients = [
+  { age: 30, chol: 1.8, risk: false },
+  { age: 45, chol: 2.2, risk: false },
+  { age: 60, chol: 2.8, risk: true },
+  { age: 70, chol: 3.1, risk: true },
+  { age: 50, chol: 2.1, risk: false },
+];
+const clf = new ensemble.GradientBoostingClassifier({ nEstimators: 20, learningRate: 0.1, maxDepth: 2, randomState: 42 });
+clf.fit(patients, { features: ["age", "chol"], target: "risk" });
+clf.predict_proba([{ age: 65, chol: 3.0 }]); // → [[~0.1, ~0.9]]
+```
+
+## `GradientBoostingRegressor` — monthly sales
+
+**When to use it** — often the **best default regressor** on tabular data:
+nonlinear trends + feature interactions with well-calibrated errors.
+
+```ts
+const months = [
+  { month: 1, sales: 120 },
+  { month: 2, sales: 135 },
+  { month: 3, sales: 128 },
+  { month: 4, sales: 150 },
+  { month: 5, sales: 160 },
+];
+const reg = new ensemble.GradientBoostingRegressor({ nEstimators: 20, learningRate: 0.1, maxDepth: 2, randomState: 42 });
+reg.fit(months, { features: ["month"], target: "sales" });
+reg.predict([{ month: 6 }]); // → ≈ 168
+```
+
+## `XGBoostClassifier` — bank fraud (strong separation)
+
+**When to use it** — regularized boosting, **state of the art on large tabular
+data** (hundreds+ rows). On tiny sets it underfits (see the pitfall below).
+
+```ts
+const operations = [
+  { amount: 100, time: 10, fraud: false },
+  { amount: 90, time: 8, fraud: false },
+  { amount: 9000, time: 2, fraud: true },
+  { amount: 7500, time: 1, fraud: true },
+  { amount: 8200, time: 3, fraud: true },
+];
+const clf = new ensemble.XGBoostClassifier({ nEstimators: 100, learningRate: 0.3, maxDepth: 3, randomState: 42 });
+clf.fit(operations, { features: ["amount", "time"], target: "fraud" });
+clf.predict([{ amount: 8500, time: 2 }]);         // → [1]
+clf.predict_proba([{ amount: 8500, time: 2 }]);   // → [[~0.4, ~0.6]]
+// ⚠️ On 5 rows XGBoost underfits (probabilities stay near the prior) —
+//    it needs hundreds of rows to shine. See the pitfalls in /08-ensemble.
+```
+
+## `XGBoostRegressor` — stock price
+
+**When to use it** — same for regression: the go-to choice on **big datasets
+with many features**; overkill on 5 rows.
+
+```ts
+const days = [
+  { day: 1, price: 100 },
+  { day: 2, price: 102 },
+  { day: 3, price: 101 },
+  { day: 4, price: 105 },
+  { day: 5, price: 108 },
+];
+const reg = new ensemble.XGBoostRegressor({ nEstimators: 20, maxDepth: 2, randomState: 42 });
+reg.fit(days, { features: ["day"], target: "price" });
+reg.predict([{ day: 6 }]); // → ≈ 109
+```
+
+
+# Clustering
+
+## `KMeans` — client segments (young vs wealthy)
+
+**When to use it** — you know the **number of groups** you want (`n_clusters`):
+customer segments, market zones, inventory categories. Fast and interpretable
+via `centroids`. `scale: true` is required (distances).
+
+```ts
+const clients = [
+  { age: 25, balance: 100 },
+  { age: 28, balance: 150 },
+  { age: 55, balance: 9000 },
+  { age: 60, balance: 8500 },
+  { age: 40, balance: 3000 },
+];
+const km = new clusters.KMeans({ n_clusters: 2, random_state: 42 });
+km.fit(clients, { features: ["age", "balance"], options: { scale: true } });
+km.labels_;   // → [0, 0, 1, 1, ?] — young vs wealthy clients
+km.centroids; // → centers of the 2 segments
+```
+
+## `DBSCAN` — store groups by density (noise = −1)
+
+**When to use it** — groups have **arbitrary shape** and density is what
+defines them, plus you want the leftovers &#x2A;*flagged as noise (−1)**. No `k` to
+choose — you pick `eps` instead.
+
+```ts
+const stores = [
+  { x: 0.1, y: 0.1 },
+  { x: 0.2, y: 0.2 },
+  { x: 0.3, y: 0.1 },
+  { x: 10.1, y: 10.2 },
+  { x: 10.2, y: 10.1 },
+];
+const db = new clusters.DBSCAN({ eps: 0.5, minSamples: 2 });
+db.fit(stores, { features: ["x", "y"] });
+db.labels_; // → [0, 0, 0, 1, 1] — 2 dense groups, no noise
+```
+
+## `HDBSCAN` — clusters of varying density (with probabilities)
+
+**When to use it** — densities **vary** and you don't want to pick `k` or
+`eps`: it finds the hierarchy by itself, and `probabilities` tells you how
+confident each point's membership is (≈ 0 = isolated).
+
+```ts
+const points = [
+  { x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 },
+  { x: 10, y: 10 }, { x: 11, y: 10 }, { x: 10, y: 11 },
+  { x: 5, y: 5 }, // ← isolated (probability ~0)
+];
+const hdb = new clusters.HDBSCAN({ min_cluster_size: 3 });
+hdb.fit(points, { features: ["x", "y"] });
+hdb.labels_;       // → 2 clusters; the isolated point has proba ~0 (not necessarily −1)
+hdb.probabilities; // → [1, 1, 1, 1, 1, 1, 1, ~0]
+```
+
+
+# Monitoring
+
+## `CUSUM` — onset of a sales spike
+
+**When to use it** — detect the **onset of a sustained shift** in a series:
+early epidemic warnings, sales spikes, rising defect rates. Fit on a
+**known-normal baseline** first (see `/09-monitoring`).
+
+```ts
+const days = [
+  { day: 1, sales: 100 },
+  { day: 2, sales: 102 },
+  { day: 3, sales: 101 },
+  { day: 4, sales: 105 },
+  { day: 5, sales: 140 }, // ← spike
+];
+const cusum = new monitoring.CUSUM();
+cusum.fit(days.slice(0, 4), { field: "sales" }); // normal baseline only
+cusum.predict(days);      // → [0, 0, 0, 0, 1]
+cusum.fill_predict(days); // → + alert: true on day 5
+```
+
+## `EWMA` — spike caught by exponential smoothing
+
+**When to use it** — same goal but it **smooths the noise** first: fewer false
+alarms on jittery series. `limits()` gives the control band to draw on a
+chart.
+
+```ts
+const days = [
+  { day: 1, sales: 100 },
+  { day: 2, sales: 102 },
+  { day: 3, sales: 101 },
+  { day: 4, sales: 105 },
+  { day: 5, sales: 140 },
+];
+const ewma = new monitoring.EWMA({ lambda: 0.25, limit: 3 });
+ewma.fit(days.slice(0, 4), { field: "sales" });
+ewma.predict(days); // → [0, 0, 0, 0, 1]
+ewma.limits(days);  // → { ucl, lcl } per day (control band)
+```
+
+## `ParallelMonitor` — paracetamol drifting, ibuprofen stable
+
+**When to use it** — you watch **several series at once** (many products,
+meters, branches): it monitors each field and tells you **which ones**
+triggered (`alertFields`).
+
+```ts
+const days = [
+  { day: 1, paracetamol: 100, ibuprofen: 60 },
+  { day: 2, paracetamol: 102, ibuprofen: 62 },
+  { day: 3, paracetamol: 101, ibuprofen: 61 },
+  { day: 4, paracetamol: 105, ibuprofen: 63 },
+  { day: 5, paracetamol: 150, ibuprofen: 62 }, // ← paracetamol spike only
+];
+const pm = new monitoring.ParallelMonitor();
+pm.fit(days.slice(0, 4), { fields: ["paracetamol", "ibuprofen"] });
+pm.alertFields(days); // → [[], [], [], [], ["paracetamol"]]
+```
+
+## `SeasonalMonitor` — weekly deseasonalization (≥ 1 full week required)
+
+**When to use it** — your series has a **weekly cycle*&#x2A; (pharmacy sales,
+traffic): it removes the weekday pattern so a real rise is not confused with a
+normal Monday peak. Needs **≥ 1 full week** of baseline.
+
+```ts
+const days = [
+  { date: "2026-07-27", sales: 130 }, // Monday (weekly peak)
+  { date: "2026-07-28", sales: 100 },
+  { date: "2026-07-29", sales: 100 },
+  { date: "2026-07-30", sales: 100 },
+  { date: "2026-08-03", sales: 170 }, // next Monday → anomaly vs profile
+];
+const sm = new monitoring.SeasonalMonitor();
+sm.fit(days, { field: "sales", dateField: "date" });
+// ⚠️ Throws: "SeasonalMonitor requires at least one full week of baseline"
+// (every weekday must be present at fit time — bring 7+ rows, see /09-monitoring)
+// After a proper 7+ day fit: sm.dayProfile → { monday: 130, tuesday: 100, … }
+```
+
+
+# Spatial Scan
+
+## `SpatialScan` — locate the epidemic cluster (Kulldorff)
+
+**When to use it** — &#x2A;*where is the most likely geographic cluster?** —
+epidemic outbreak location, fraud hotspots. Needs a **population
+denominator** per zone.
+
+```ts
+const zones = [
+  { zone: "A", lon: 0, lat: 0, population: 1000, cases: 8 }, // ← hotspot
+  { zone: "B", lon: 1, lat: 0, population: 1000, cases: 1 },
+  { zone: "C", lon: 0, lat: 1, population: 1000, cases: 1 },
+  { zone: "D", lon: 1, lat: 1, population: 1000, cases: 1 },
+  { zone: "E", lon: 5, lat: 5, population: 1000, cases: 1 },
+];
+const model = new scan.SpatialScan({ replications: 199, randomState: 42 });
+model.fit(zones, { zone: "zone", coordinates: ["lon", "lat"], population: "population", cases: "cases" });
+model.cluster(zones);
+// → { zones: ["A"], cases: 8, expected: ~2.4, llr: ~6.1, pValue: 0.005 }
+//   A is the most likely cluster (p < 0.05). Returns null when nothing is significant.
+```
+
+## `GetisOrd` — abnormally hot zone (Gi\* hotspot)
+
+**When to use it** — &#x2A;*which zones are significantly hot/cold?** — per-zone
+significance without a population. Needs more zones (10+) than the other
+examples on this page.
+
+> ⚠️ Spatial statistics need more zones: Gi\* cannot reach significance with
+> ≤ 5 rows (the global variance absorbs the hotspot). This example uses a
+> 3×3 grid — the only exception to the 5-row rule on this page.
+
+```ts
+const zones = [
+  { zone: "A", lon: 0, lat: 0, cases: 1 }, { zone: "B", lon: 1, lat: 0, cases: 8 },
+  { zone: "C", lon: 2, lat: 0, cases: 1 }, { zone: "D", lon: 0, lat: 1, cases: 8 },
+  { zone: "E", lon: 1, lat: 1, cases: 8 }, { zone: "F", lon: 2, lat: 1, cases: 8 },
+  { zone: "G", lon: 0, lat: 2, cases: 1 }, { zone: "H", lon: 1, lat: 2, cases: 8 },
+  { zone: "I", lon: 2, lat: 2, cases: 1 },
+];
+const gi = new scan.GetisOrd({ distance: 1.1 });
+gi.fit(zones, { zone: "zone", coordinates: ["lon", "lat"], cases: "cases" });
+gi.hotspots(zones);
+// → [{ zone: "E", zScore: ~2.83, pValue: ~0.005, hot: true, cold: false }, ...]
+//   E (center) is the only significant hot spot: its 8-case arms lift its
+//   neighborhood above the flat 1-case corners.
+```
+
+
+# Feature Selection
+
+## `mutualInfoClassif` — signal before noise (nonlinear)
+
+**When to use it** — rank features by their **nonlinear association** with the
+target *before* training: find the signal, drop the noise, build a smaller
+spec.
+
+```ts
+const data = [
+  { signal: 1, noise: 0.1, bought: false },
+  { signal: 2, noise: 0.8, bought: false },
+  { signal: 8, noise: 0.3, bought: true },
+  { signal: 9, noise: 0.9, bought: true },
+  { signal: 5, noise: 0.4, bought: true },
+];
+const ranking = featureSelection.mutualInfoClassif(data, {
+  features: ["signal", "noise"], target: "bought",
+});
+// → [
+//     { feature: "signal", score: ~0.6 },  ← ranked first
+//     { feature: "noise", score: ~0 },
+//   ]
+```
+
+## `SelectFromModel` — keep what the Lasso finds useful
+
+**When to use it** — keep the features a trained model actually finds useful:
+automatically build a **smaller spec** (faster training, less overfitting,
+easier explanations).
+
+```ts
+const data = [
+  { salary: 38000, noise: 7, age: 30 },
+  { salary: 46000, noise: 2, age: 35 },
+  { salary: 55000, noise: 9, age: 40 },
+  { salary: 71000, noise: 6, age: 50 },
+  { salary: 95000, noise: 5, age: 65 },
+];
+const sel = new featureSelection.SelectFromModel({
+  estimator: new linear.LassoRegression({ alpha: 1 }),
+});
+sel.fit(data, { features: ["salary", "noise"], target: "age" });
+sel.selectedFeatures; // → ["salary"] — noise dropped
+sel.support;          // → [true, false]
+```
+
+
+# Evaluation
+
+## `compareModels` — which model for this case? (leaderboard)
+
+**When to use it** — **rank models** on your data with cross-validation: pick
+the best family without relying on one arbitrary split.
+
+```ts
+const employees = [
+  { years: 1, salary: 30000 },
+  { years: 2, salary: 36000 },
+  { years: 3, salary: 42000 },
+  { years: 4, salary: 48000 },
+  { years: 5, salary: 54000 },
+];
+const leaderboard = evaluation.compareModels(
+  {
+    linear: () => new linear.LinearRegression(),
+    ridge: () => new linear.RidgeRegression({ alpha: 1 }),
+    tree: () => new tree.DecisionTreeRegressor({ max_depth: 2 }),
+  },
+  employees,
+  { features: ["years"], target: "salary" },
+  { cv: 3, randomState: 42 },
+);
+// → [{ name: "linear", mean: ~1.00, std: ~0.00, scores: [...] },
+//     { name: "ridge", mean: ~0.64, ... }, ...] — sorted best first
+```
+
+## `detectTask` + `trainTestSplit` + pure metrics
+
+**When to use them** — `detectTask` tells you if a spec is classification or
+regression (pick the right family/scoring). `trainTestSplit` holds out rows to
+measure generalization. The pure metrics below score predictions directly.
+
+```ts
+const employees = [
+  { years: 1, salary: 30000 },
+  { years: 2, salary: 36000 },
+  { years: 3, salary: 42000 },
+  { years: 4, salary: 48000 },
+  { years: 5, salary: 54000 },
+];
+const clients = [
+  { age: 20, balance: 100, bought: false },
+  { age: 35, balance: 5000, bought: true },
+  { age: 45, balance: 9000, bought: true },
+  { age: 25, balance: 300, bought: false },
+  { age: 30, balance: 1200, bought: false },
+];
+evaluation.detectTask(employees, { features: ["years"], target: "salary" }); // → "regression"
+evaluation.detectTask(clients, { features: ["age", "balance"], target: "bought" }); // → "classification"
+
+const { train, test } = evaluation.trainTestSplit(employees, { testSize: 0.4, randomState: 42 });
+// → { train: 3 rows, test: 2 rows }
+
+const reg = new linear.LinearRegression();
+reg.fit(employees, { features: ["years"], target: "salary" });
+const preds = reg.predict(employees);
+const truth = employees.map((e) => e.salary);
+
+evaluation.rmse(preds, truth);                // → ≈ 0 (near-perfect fit)
+evaluation.mape(preds, truth);                // → ≈ 0
+evaluation.mcc([0, 1, 1, 0], [0, 1, 1, 0]);  // → 1 (perfect classification)
+```
+
+
+# Metric Cheat Sheet
+
+Model methods are available on the models themselves (`reg.score(data)`,
+`clf.mae(data)`…); the pure functions are exported from the package root and
+called `evaluation.xxx(...)`. Convention: **predictions first, truth second**
+for label/regression metrics; **truth first** for probability/curve metrics
+(kml style).
+
+## Regression — `score`, `mse`, `mae`, `rmse`, `mape`, `medianAbsoluteError`
+
+| Metric                | What it measures                                                       | When to prefer it                                                        |
+| --------------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `score` (R²)          | share of variance explained — 1 = perfect, 0 = no better than the mean | **overall fit quality**, comparing models                                |
+| `mse`                 | mean squared error — 0 = perfect; large errors weigh a lot             | **big mistakes are costly** (a 100-unit error is worse than 10× 10-unit) |
+| `rmse`                | √MSE — same **units as the target**                                    | you want the typical error in euros/days/sales                           |
+| `mae`                 | mean absolute error — same units, **outlier-robust**                   | the typical error you will actually see in practice                      |
+| `mape`                | average **% error** (0.05 = 5% off on average)                         | relative error matters (compare small and large items fairly)            |
+| `medianAbsoluteError` | median of \|y − ŷ\|                                                    | outliers must not move the metric                                        |
+
+## Classification — `score`, `classificationReport`, `mcc`, `balancedAccuracy`
+
+| Metric                 | What it measures                                                | When to prefer it                                                            |
+| ---------------------- | --------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `score` (accuracy)     | share of correct labels                                         | only on **balanced** classes; misleading otherwise                           |
+| precision              | of the *predicted* positives, how many are right                | **false alarms are costly** (a false fraud alert wastes an investigation)    |
+| recall                 | of the *actual* positives, how many were found                  | **missed positives are costly** (fraud, epidemics — you must not miss cases) |
+| `fScore` (F1 / Fβ)     | harmonic balance of precision/recall — β > 1 favors recall      | a single number when you want **balance** (default F1)                       |
+| `classificationReport` | accuracy + precision + recall + Fβ + support + confusion matrix | full picture of a classifier in one call                                     |
+| `mcc`                  | Matthews correlation −1..+1 — robust to imbalance               | **THE number for imbalanced data** (fraud, rare diseases)                    |
+| `balancedAccuracy`     | macro recall (mean recall per class)                            | “honest” accuracy when classes are skewed                                    |
+
+## Probability — `rocAucScore`, `prAucScore`, `logLoss`, `rocCurve`, `optimalThreshold`
+
+| Metric             | What it measures                                                | When to prefer it                                                           |
+| ------------------ | --------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `rocAucScore`      | ranking quality — 1 = perfect separation, 0.5 = random (binary) | global ranking quality of a `predict_proba` model                           |
+| `prAucScore`       | precision-recall AUC                                            | **rare events** (epidemic, fraud): drops when false alarms grow, unlike ROC |
+| `logLoss`          | cross-entropy — punishes confident **and wrong** probabilities  | probability calibration matters (risk scores, betting)                      |
+| `rocCurve`         | `{ fpr, tpr, thresholds }` — the full curve                     | plotting, or choosing where the curve bends                                 |
+| `optimalThreshold` | Youden's J — the threshold that maximizes tpr − fpr             | turning probabilities into **alerts/decisions**                             |
+
+## Workflow helpers
+
+| Function                              | What it does                                       | When to use it                                                     |
+| ------------------------------------- | -------------------------------------------------- | ------------------------------------------------------------------ |
+| `trainTestSplit`                      | splits rows into train/test (seeded, stratifiable) | measure generalization on **unseen** rows                          |
+| `crossValScore`                       | k-fold scores — one score per fold                 | robust model comparison (mean **and** fold spread)                 |
+| `compareModels`                       | trains & ranks several models with CV              | **choose the best model family** for your case                     |
+| `detectTask`                          | `"classification"` \| `"regression"` from a spec   | auto-pick a family and a default scoring                           |
+| `predictStream` / `fillPredictStream` | chunked inference (generators OK)                  | run predictions over **millions of rows** without loading them all |
+
+**Which metric first?** For regression start with **R²** (overall quality),
+then **MAE** (typical error in target units); add **MAPE** if you compare
+items of very different sizes. For classification on imbalanced data (fraud,
+epidemics) never trust accuracy alone — look at **recall**, **prAucScore** and
+**mcc**.
+
+
+# Overview
+
+> **Scoped vs flat import** — the examples use **scoped** imports
+> (`new linear.LinearRegression()`, `evaluation.mcc(...)`). Flat imports
+> (`new LinearRegression()`) are identical. Note that `options` (scale,
+> oneHot, missing…) always live in the **fit spec**, not the constructor.
+
+Each example is a small, concrete case: a 5-row JSON dataset, the scoped call,
+and the **expected output**. Values marked `~` are approximate (real data
+never fits perfectly). Every section also says **when to use the model** in
+the real world.
+
+| Page                                                                        | Examples                                                                      |
+| --------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| [Linear](http://localhost:3000/15-examples/01-linear)                       | 9 regressors & classifiers — salary, churn, feature selection, counts, curves |
+| [Neighbors](http://localhost:3000/15-examples/02-neighbors)                 | kNN classifier & regressor                                                    |
+| [Tree](http://localhost:3000/15-examples/03-tree)                           | DecisionTree & ExtraTree classifiers/regressors                               |
+| [Ensemble](http://localhost:3000/15-examples/04-ensemble)                   | forests, boosting, IsolationForest                                            |
+| [Clustering](http://localhost:3000/15-examples/05-clustering)               | KMeans, DBSCAN, HDBSCAN                                                       |
+| [Monitoring](http://localhost:3000/15-examples/06-monitoring)               | CUSUM, EWMA, ParallelMonitor, SeasonalMonitor                                 |
+| [Spatial Scan](http://localhost:3000/15-examples/07-scan)                   | Kulldorff & Getis-Ord Gi\*                                                    |
+| [Feature Selection](http://localhost:3000/15-examples/08-feature-selection) | mutual information, SelectFromModel                                           |
+| [Evaluation](http://localhost:3000/15-examples/09-evaluation)               | compareModels, detectTask, splits, pure metrics                               |
+| [Metric Cheat Sheet](http://localhost:3000/15-examples/10-metrics)          | what score, mse, mae, mcc… measure and when                                   |
+
+
+# Dnax ML — Lightweight Machine Learning for Devs & Humans
+
+::landing-hero
+---
+badge:
+  label: v0.0.1
+  text: JSON-first · zero-boilerplate · dependency-light
+  href: /01-getting-started
+primaryCta:
+  label: Get started
+  href: /01-getting-started
+  icon: i-heroicons-arrow-right-20-solid
+secondaryCta:
+  label: GitHub
+  href: https://github.com/dnaxio/ml
+  icon: i-simple-icons-github
+description: Train and predict directly on JSON rows — no manual matrix
+  conversion, no Python runtime. A thin TypeScript layer on top of @kanaries/ml
+  with a scikit-learn-aligned vocabulary.
+headline: Lightweight Machine Learning for Devs & Humans
+siteName: Dnax ML
+---
+::

@@ -1,0 +1,3 @@
+import{On as e,g as t,k as n,mt as r,v as i,y as a}from"./CJOrt7RF.js";import{n as o,t as s}from"./CuCuxcKC.js";var c=Object.assign(n({__name:`ProsePmRun.global`,props:{inStack:{type:Boolean,default:!1},script:{},sync:{default:`_pm`},noSync:{type:Boolean,default:!1}},setup(n){let c=n,{packageManagers:l}=s(),u=t(()=>{let e=l.map(e=>{let t=`${e.command}${e.run}${c.script}`;return`\`\`\`bash icon="${e.icon}" noFormat hideHeader [${e.name}]\n${t}\n\`\`\``}).join(`
+
+`),t=[c.inStack&&`in-stack`,!c.noSync&&`sync="${c.sync}"`].filter(Boolean).join(` `);return`::prose-code-group${t?`{${t}}`:``}\n${e}\n::`});return(t,n)=>{let s=o;return e(u)?(r(),i(s,{key:0,unwrap:`p`,value:e(u),class:`not-first:mt-5`},null,8,[`value`])):a(``,!0)}}}),{__name:`ProsePmRun`});export{c as default};

@@ -1,0 +1,1 @@
+import"./DEvma7oi2.js";import{n as e}from"./DJbIptGx2.js";export{e as createArchitectureServices};

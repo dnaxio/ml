@@ -1,0 +1,1 @@
+.show-line-number .line:before{font-size:var(--text-sm);line-height:var(--tw-leading,var(--text-xs--line-height));width:calc(var(--spacing)*5);text-align:center;margin-right:calc(var(--spacing)*4);color:var(--muted-foreground);display:inline-block}.show-line-number .line:not(.diff):before{content:attr(line)}

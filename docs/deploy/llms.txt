@@ -1,0 +1,93 @@
+# Dnax ML — Lightweight Machine Learning for Devs & Humans
+
+> JSON-first machine learning in TypeScript: train and predict directly on arrays of row objects — no matrix conversion, no Python runtime.
+
+## Documentation Sets
+
+- [Dnax ML — Lightweight Machine Learning for Devs & Humans](http://localhost:3000/llms-full.txt): JSON-first machine learning in TypeScript: train and predict directly on arrays of row objects — no matrix conversion, no Python runtime.
+
+## Docs
+
+- [Architecture](http://localhost:3000/raw/01-getting-started/02-architecture.md): How @dnax/ml is structured — the JSON-first facade over @kanaries/ml, and why it stays dependency-light.
+- [Core Concepts](http://localhost:3000/raw/01-getting-started/03-core-concepts.md): The JSON-first spec, value encoding, missing values, scoped imports and the common API surface.
+- [Introduction](http://localhost:3000/raw/01-getting-started.md): Install @dnax/ml and train your first model on JSON rows.
+- [Linear Regression](http://localhost:3000/raw/04-linear/01-linear-regression.md): Ordinary least squares — the baseline every other model is compared to.
+- [Logistic Regression](http://localhost:3000/raw/04-linear/02-logistic-regression.md): Binary and multiclass classification with probabilities.
+- [Ridge Regression](http://localhost:3000/raw/04-linear/03-ridge-regression.md): L2-regularized regression — stable coefficients on correlated features.
+- [Lasso Regression](http://localhost:3000/raw/04-linear/04-lasso-regression.md): L1-regularized regression — sparse coefficients, feature selection.
+- [Elastic Net](http://localhost:3000/raw/04-linear/05-elastic-net.md): Combined L1 + L2 regularization — stable on correlated features with feature selection.
+- [Ridge Classifier](http://localhost:3000/raw/04-linear/06-ridge-classifier.md): Fast L2-regularized linear classifier — labels only, no probabilities.
+- [RANSAC Regressor](http://localhost:3000/raw/04-linear/07-ransac-regressor.md): Robust regression that ignores outliers.
+- [Poisson Regressor](http://localhost:3000/raw/04-linear/08-poisson-regressor.md): Generalized linear model for count targets — predictions are always ≥ 0.
+- [Polynomial Regression](http://localhost:3000/raw/04-linear/09-polynomial-regression.md): Fits nonlinear curves by expanding features to powers 1..degree.
+- [Overview](http://localhost:3000/raw/04-linear.md): Regression and classification on linear relationships — 9 models sharing one JSON-first API.
+- [KNeighborsClassifier](http://localhost:3000/raw/05-neighbors/01-kneighbors-classifier.md): Classify each point by majority vote of its k nearest labeled examples.
+- [KNeighborsRegressor](http://localhost:3000/raw/05-neighbors/02-kneighbors-regressor.md): Predict by averaging the target values of the k nearest labeled examples.
+- [Overview](http://localhost:3000/raw/05-neighbors.md): Instance-based learning — KNeighborsClassifier and KNeighborsRegressor predict from the nearest labeled examples.
+- [KMeans](http://localhost:3000/raw/06-clustering/01-kmeans.md): Centroid clustering — partitions rows into n_clusters groups.
+- [DBSCAN](http://localhost:3000/raw/06-clustering/02-dbscan.md): Density-based clustering — dense regions, isolated points become noise (-1).
+- [HDBSCAN](http://localhost:3000/raw/06-clustering/03-hdbscan.md): Hierarchical density clustering — clusters of arbitrary shape and varying density, with membership probabilities.
+- [Overview](http://localhost:3000/raw/06-clustering.md): Unsupervised grouping — KMeans, density-based DBSCAN and hierarchical HDBSCAN.
+- [DecisionTreeClassifier](http://localhost:3000/raw/07-tree/01-decision-tree-classifier.md): Classify with readable if/then rules — labels only, no probabilities.
+- [DecisionTreeRegressor](http://localhost:3000/raw/07-tree/02-decision-tree-regressor.md): Stepwise regression — each leaf predicts the mean of its bucket.
+- [ExtraTreeClassifier](http://localhost:3000/raw/07-tree/03-extra-tree-classifier.md): Extremely randomized tree classifier — with probabilities.
+- [ExtraTreeRegressor](http://localhost:3000/raw/07-tree/04-extra-tree-regressor.md): Extremely randomized tree regressor.
+- [Overview](http://localhost:3000/raw/07-tree.md): Interpretable decision trees — DecisionTree and ExtraTree classifiers and regressors.
+- [IsolationForest](http://localhost:3000/raw/08-ensemble/01-isolation-forest.md): Unsupervised anomaly detection — flags points that are isolated quickly.
+- [RandomForestClassifier](http://localhost:3000/raw/08-ensemble/02-random-forest-classifier.md): Many trees combined by majority vote — robust tabular default.
+- [RandomForestRegressor](http://localhost:3000/raw/08-ensemble/03-random-forest-regressor.md): Many trees combined by averaging — robust regression default.
+- [AdaBoostClassifier](http://localhost:3000/raw/08-ensemble/04-adaboost-classifier.md): Sequential boosting of stumps, each correcting the previous mistakes.
+- [AdaBoostRegressor](http://localhost:3000/raw/08-ensemble/05-adaboost-regressor.md): Sequential boosting for regression — each round corrects the previous residuals.
+- [GradientBoostingClassifier](http://localhost:3000/raw/08-ensemble/06-gradient-boosting-classifier.md): Sequential trees fitted on residuals — the strongest tabular default.
+- [GradientBoostingRegressor](http://localhost:3000/raw/08-ensemble/07-gradient-boosting-regressor.md): Sequential trees fitted on residuals — a strong regression default.
+- [XGBoostClassifier](http://localhost:3000/raw/08-ensemble/08-xgboost-classifier.md): Regularized gradient boosting — state of the art on large tabular data.
+- [XGBoostRegressor](http://localhost:3000/raw/08-ensemble/09-xgboost-regressor.md): Regularized gradient boosting for regression — the go-to for big datasets.
+- [Overview](http://localhost:3000/raw/08-ensemble.md): Random forests, AdaBoost, Gradient Boosting and XGBoost — plus IsolationForest for anomaly detection.
+- [CUSUM](http://localhost:3000/raw/09-monitoring/01-cusum.md): Cumulative sum — very sensitive to small sustained shifts.
+- [EWMA](http://localhost:3000/raw/09-monitoring/02-ewma.md): Exponentially weighted moving average — smooths noise, fewer false alarms.
+- [ParallelMonitor](http://localhost:3000/raw/09-monitoring/03-parallel-monitor.md): Monitor several series at once — one chart per field, per-field alerts.
+- [SeasonalMonitor](http://localhost:3000/raw/09-monitoring/04-seasonal-monitor.md): Weekly deseasonalization — removes the weekday cycle before detecting shifts.
+- [Overview](http://localhost:3000/raw/09-monitoring.md): Detect when a series drifts from its normal — CUSUM, EWMA, weekly deseasonalization and multi-series monitoring.
+- [SpatialScan](http://localhost:3000/raw/10-scan/01-spatial-scan.md): Kulldorff's scan statistic — the most likely geographic cluster, with population.
+- [GetisOrd](http://localhost:3000/raw/10-scan/02-getis-ord.md): Getis-Ord Gi* — which zones are statistically hot or cold, no population needed.
+- [Overview](http://localhost:3000/raw/10-scan.md): Detect statistically significant spatial clusters — Kulldorff's scan (most likely cluster) and Getis-Ord Gi* (per-zone hotspots).
+- [Model Scoring](http://localhost:3000/raw/11-evaluation/01-model-scoring.md): score, mse, mae, classificationReport and rocAucScore on rows with ground truth.
+- [Splits & Cross-validation](http://localhost:3000/raw/11-evaluation/02-splits-and-cv.md): trainTestSplit and crossValScore — measure generalization on unseen rows.
+- [Leaderboard](http://localhost:3000/raw/11-evaluation/03-leaderboard.md): compareModels ranks several models on the same case, and detectTask tells you the ML case.
+- [Streaming](http://localhost:3000/raw/11-evaluation/04-streaming.md): predictStream and fillPredictStream — memory-bounded inference over millions of rows.
+- [Metric Library](http://localhost:3000/raw/11-evaluation/05-metric-library.md): Pure functions on arrays — regression, classification and probability metrics.
+- [Overview](http://localhost:3000/raw/11-evaluation.md): Score your models — R², MSE, MAE, accuracy, classification reports, ROC/AUC, train/test splits and cross-validation.
+- [Univariate Scoring](http://localhost:3000/raw/12-feature-selection/01-univariate.md): Score each feature independently against the target — linear and nonlinear measures.
+- [SelectFromModel](http://localhost:3000/raw/12-feature-selection/02-select-from-model.md): Keep the features a trained model finds useful — threshold + optional top-k cap.
+- [Overview](http://localhost:3000/raw/12-feature-selection.md): Rank or select the informative columns before training — univariate scores and model-based selection on JSON rows.
+- [Persistence](http://localhost:3000/raw/13-persistence/01-persistence.md): Export to and load from a versioned .json file.
+- [Model Parameters](http://localhost:3000/raw/13-persistence/02-parameters.md): coef, intercept, getParams and setParams — inspect and inject learned parameters.
+- [predictAsync](http://localhost:3000/raw/13-persistence/03-predict-async.md): Offload the matrix-vector product to a worker, keeping the event loop responsive.
+- [Utilities](http://localhost:3000/raw/13-persistence/04-utilities.md): columnNames and droppedRows — common getters on every model.
+- [Overview](http://localhost:3000/raw/13-persistence.md): Export and load models, inject parameters, and offload predictions.
+- [Linear](http://localhost:3000/raw/14-api-reference/01-linear.md): 9 regression & classification models — constructor params and methods.
+- [Tree](http://localhost:3000/raw/14-api-reference/02-tree.md): DecisionTree and ExtraTree classifiers and regressors.
+- [Ensemble](http://localhost:3000/raw/14-api-reference/03-ensemble.md): Random forests, AdaBoost, Gradient Boosting, XGBoost and IsolationForest.
+- [Clustering](http://localhost:3000/raw/14-api-reference/04-clustering.md): KMeans, DBSCAN and HDBSCAN — spec has no target.
+- [Neighbors](http://localhost:3000/raw/14-api-reference/05-neighbors.md): KNeighborsClassifier and KNeighborsRegressor — instance-based, distance-based.
+- [Monitoring](http://localhost:3000/raw/14-api-reference/06-monitoring.md): CUSUM, EWMA, ParallelMonitor and SeasonalMonitor — params and extras.
+- [Spatial Scan](http://localhost:3000/raw/14-api-reference/07-scan.md): SpatialScan (Kulldorff) and GetisOrd (Gi*) — params, methods and result shapes.
+- [Feature Selection](http://localhost:3000/raw/14-api-reference/08-feature-selection.md): Univariate scoring and SelectFromModel — API reference.
+- [Evaluation](http://localhost:3000/raw/14-api-reference/09-evaluation.md): Splits, cross-validation, leaderboard, streaming and pure metrics — API reference.
+- [Spec Types](http://localhost:3000/raw/14-api-reference/10-spec-types.md): JsonFitSpec, ClusterSpec, MonitorSpec, ParallelSpec, SeasonalSpec, ScanSpec, HotspotSpec and JsonTransformOptions.
+- [Overview](http://localhost:3000/raw/14-api-reference.md): Every model class, constructor parameter, method and getter — the complete reference for all algorithms.
+- [Linear](http://localhost:3000/raw/15-examples/01-linear.md): 9 examples — regression, classification, feature selection, counts and curves.
+- [Neighbors](http://localhost:3000/raw/15-examples/02-neighbors.md): 2 examples — kNN classification and regression from the nearest labeled examples.
+- [Tree](http://localhost:3000/raw/15-examples/03-tree.md): 4 examples — DecisionTree and ExtraTree classifiers and regressors.
+- [Ensemble](http://localhost:3000/raw/15-examples/04-ensemble.md): 9 examples — forests, boosting and IsolationForest.
+- [Clustering](http://localhost:3000/raw/15-examples/05-clustering.md): 3 examples — KMeans, density-based DBSCAN and hierarchical HDBSCAN.
+- [Monitoring](http://localhost:3000/raw/15-examples/06-monitoring.md): 4 examples — CUSUM, EWMA, multi-series and weekly deseasonalization.
+- [Spatial Scan](http://localhost:3000/raw/15-examples/07-scan.md): 2 examples — Kulldorff's scan and Getis-Ord Gi* hotspots.
+- [Feature Selection](http://localhost:3000/raw/15-examples/08-feature-selection.md): 2 examples — mutual information ranking and SelectFromModel.
+- [Evaluation](http://localhost:3000/raw/15-examples/09-evaluation.md): 2 examples — model leaderboard, and detectTask + splits + pure metrics.
+- [Metric Cheat Sheet](http://localhost:3000/raw/15-examples/10-metrics.md): What score, mse, mae, rmse, mape, mcc, prAucScore… measure, and when to prefer each one.
+- [Overview](http://localhost:3000/raw/15-examples.md): Ready-made JSON datasets (≤ 5 rows) for every model and API — concrete cases with expected outputs. Scoped imports everywhere.
+
+## Landing
+
+- [Dnax ML — Lightweight Machine Learning for Devs & Humans](http://localhost:3000/raw/index.md): JSON-first machine learning in TypeScript. Train and predict directly on arrays of row objects — no matrix conversion, no Python runtime.
