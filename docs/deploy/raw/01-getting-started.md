@@ -9,7 +9,7 @@ bun add @dnax/ml
 ```
 
 `@dnax/ml` runs on Bun, Node.js and in the browser. It has a single
-dependency (`@kanaries/ml`, pinned to an exact version), which is itself
+runtime dependency (pinned to an exact version), which is itself
 dependency-free — the runtime footprint is minimal.
 
 ## Quick start

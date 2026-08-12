@@ -11,7 +11,7 @@ badge:
   text: JSON-first · zero-boilerplate · dependency-light
   href: /01-getting-started
 headline: Lightweight Machine Learning for Devs & Humans
-description: Train and predict directly on JSON rows — no manual matrix conversion, no Python runtime. A thin TypeScript layer on top of @kanaries/ml with a scikit-learn-aligned vocabulary.
+description: Train and predict directly on JSON rows — no manual matrix conversion, no Python runtime. A dependency-light TypeScript library with a scikit-learn-aligned vocabulary.
 siteName: Dnax ML
 primaryCta:
   label: Get started

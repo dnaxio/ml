@@ -1,20 +1,19 @@
 ---
 title: Architecture
-description: How @dnax/ml is structured — the JSON-first facade over @kanaries/ml, and why it stays dependency-light.
+description: How @dnax/ml is structured — the JSON-first core facade, and why it stays dependency-light.
 ---
 
-`@dnax/ml` is a **JSON-first facade** over the `@kanaries/ml` engine (pinned
-to an exact version — `1.1.0` — to freeze its internal serialization format):
-all direct access to the engine is centralized in a single internal module
-(the **core facade**), so swapping the engine — or vendoring it — only
-requires rewriting that one layer, never the models themselves.
+`@dnax/ml` is a **JSON-first facade**: all direct access to the underlying
+engine is centralized in a single internal module (the **core facade**), so
+swapping the engine — or vendoring it — only requires rewriting that one
+layer, never the models themselves.
 
 ## Dependencies
 
-`@dnax/ml` declares a single runtime dependency: `@kanaries/ml` (pinned to an
-exact version), which is itself **dependency-free** — the whole runtime
-footprint is one package. The monitoring and scan families are pure
-JavaScript with zero dependencies.
+`@dnax/ml` declares a single runtime dependency — pinned to an exact version
+so its internal serialization format stays frozen — and that dependency is
+itself **dependency-free**: the whole runtime footprint is one package. The
+monitoring and scan families are pure JavaScript with zero dependencies.
 
 ## Design principles
 

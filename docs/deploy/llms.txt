@@ -8,7 +8,7 @@
 
 ## Docs
 
-- [Architecture](http://localhost:3000/raw/01-getting-started/02-architecture.md): How @dnax/ml is structured — the JSON-first facade over @kanaries/ml, and why it stays dependency-light.
+- [Architecture](http://localhost:3000/raw/01-getting-started/02-architecture.md): How @dnax/ml is structured — the JSON-first core facade, and why it stays dependency-light.
 - [Core Concepts](http://localhost:3000/raw/01-getting-started/03-core-concepts.md): The JSON-first spec, value encoding, missing values, scoped imports and the common API surface.
 - [Introduction](http://localhost:3000/raw/01-getting-started.md): Install @dnax/ml and train your first model on JSON rows.
 - [Linear Regression](http://localhost:3000/raw/04-linear/01-linear-regression.md): Ordinary least squares — the baseline every other model is compared to.
